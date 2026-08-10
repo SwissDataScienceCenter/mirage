@@ -15,12 +15,12 @@ var _ = Describe("Load", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(c.Confined).To(Equal([]config.Resource{
-			{Group: "", Resource: "pods"},
-			{Group: "shipwright.io", Resource: "builds"},
+			{Group: "", Plural: "pods"},
+			{Group: "shipwright.io", Plural: "builds"},
 		}))
 		Expect(c.Masked).To(Equal([]config.Masked{
 			{
-				Resource: config.Resource{Group: "shipwright.io", Resource: "clusterbuildstrategies"},
+				Resource: config.Resource{Group: "shipwright.io", Plural: "clusterbuildstrategies"},
 				Kind:     "ClusterBuildStrategy",
 			},
 		}))
@@ -47,12 +47,12 @@ var _ = Describe("Validate", func() {
 
 	It("accepts the same resource name in two groups", func() {
 		Expect(config.Config{Confined: []config.Resource{
-			{Group: "shipwright.io", Resource: "builds"},
-			{Group: "tekton.dev", Resource: "builds"},
+			{Group: "shipwright.io", Plural: "builds"},
+			{Group: "tekton.dev", Plural: "builds"},
 		}}.Validate()).To(Succeed())
 	})
 
-	It("rejects a confined entry without a resource", func() {
+	It("rejects a confined entry without a plural", func() {
 		Expect(config.Config{Confined: []config.Resource{
 			{Group: "shipwright.io"},
 		}}.Validate()).NotTo(Succeed())
@@ -61,14 +61,14 @@ var _ = Describe("Validate", func() {
 	It("rejects a masked entry without a kind", func() {
 		// Without a Kind there is no name for the empty list Mirage synthesises.
 		Expect(config.Config{Masked: []config.Masked{
-			{Resource: config.Resource{Group: "shipwright.io", Resource: "clusterbuildstrategies"}},
+			{Resource: config.Resource{Group: "shipwright.io", Plural: "clusterbuildstrategies"}},
 		}}.Validate()).NotTo(Succeed())
 	})
 
 	It("rejects the same resource confined twice", func() {
 		Expect(config.Config{Confined: []config.Resource{
-			{Group: "shipwright.io", Resource: "builds"},
-			{Group: "shipwright.io", Resource: "builds"},
+			{Group: "shipwright.io", Plural: "builds"},
+			{Group: "shipwright.io", Plural: "builds"},
 		}}.Validate()).NotTo(Succeed())
 	})
 
@@ -76,14 +76,14 @@ var _ = Describe("Validate", func() {
 		// Confining means inserting the Target Namespace into the path, and there is
 		// no /api/v1/namespaces/{ns}/namespaces to insert it into.
 		Expect(config.Config{Confined: []config.Resource{
-			{Resource: "namespaces"},
+			{Plural: "namespaces"},
 		}}.Validate()).NotTo(Succeed())
 	})
 
 	It("accepts masked namespaces", func() {
 		// Masking is coherent: the Client simply sees no namespaces at all.
 		Expect(config.Config{Masked: []config.Masked{
-			{Resource: config.Resource{Resource: "namespaces"}, Kind: "Namespace"},
+			{Resource: config.Resource{Plural: "namespaces"}, Kind: "Namespace"},
 		}}.Validate()).To(Succeed())
 	})
 
@@ -91,7 +91,7 @@ var _ = Describe("Validate", func() {
 		// A CRD that happens to be called "namespaces" is an ordinary resource and
 		// may well be namespaced. Only the core one is cluster-scoped.
 		Expect(config.Config{Confined: []config.Resource{
-			{Group: "example.com", Resource: "namespaces"},
+			{Group: "example.com", Plural: "namespaces"},
 		}}.Validate()).To(Succeed())
 	})
 
@@ -99,9 +99,9 @@ var _ = Describe("Validate", func() {
 		// The two decisions are mutually exclusive; preferring one silently would
 		// make Mirage's behaviour depend on an ordering the Deployer cannot see.
 		Expect(config.Config{
-			Confined: []config.Resource{{Group: "shipwright.io", Resource: "builds"}},
+			Confined: []config.Resource{{Group: "shipwright.io", Plural: "builds"}},
 			Masked: []config.Masked{
-				{Resource: config.Resource{Group: "shipwright.io", Resource: "builds"}, Kind: "Build"},
+				{Resource: config.Resource{Group: "shipwright.io", Plural: "builds"}, Kind: "Build"},
 			},
 		}.Validate()).NotTo(Succeed())
 	})

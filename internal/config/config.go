@@ -20,15 +20,18 @@ import (
 type Resource struct {
 	// Group is the API group, empty for the core group.
 	Group string `yaml:"group"`
-	// Resource is the plural name as it appears in the URL, e.g. "taskruns".
-	Resource string `yaml:"resource"`
+	// Plural is the lowercase plural name, as it appears in the URL and in a CRD's
+	// spec.names.plural — "taskruns", not "TaskRun" or "taskrun". It is the plural
+	// because that is what a request path carries; matching on anything else would
+	// mean guessing at pluralisation rules Mirage has no way to look up.
+	Plural string `yaml:"plural"`
 }
 
 func (r Resource) String() string {
 	if r.Group == "" {
-		return r.Resource
+		return r.Plural
 	}
-	return r.Resource + "." + r.Group
+	return r.Plural + "." + r.Group
 }
 
 // Masked is a Resource that Mirage answers itself rather than forwarding.
@@ -76,8 +79,8 @@ func (c Config) Validate() error {
 	seen := make(map[Resource]string, len(c.Confined)+len(c.Masked))
 
 	for _, r := range c.Confined {
-		if r.Resource == "" {
-			return fmt.Errorf("confined entry with group %q has no resource", r.Group)
+		if r.Plural == "" {
+			return fmt.Errorf("confined entry with group %q has no plural", r.Group)
 		}
 		// Confining means inserting the Target Namespace into the path, which is
 		// meaningless for a cluster-scoped resource. Namespaces is the one case
@@ -85,7 +88,7 @@ func (c Config) Validate() error {
 		// reach for, so it is refused with a reason rather than accepted and
 		// rewritten into a path the API server does not serve. Masking it is a
 		// coherent choice and remains allowed.
-		if r.Group == "" && r.Resource == "namespaces" {
+		if r.Group == "" && r.Plural == "namespaces" {
 			return fmt.Errorf("namespaces cannot be confined: it is cluster-scoped, so there is no namespaced path to rewrite it into; mask it instead if the Client should see none")
 		}
 		if where, dup := seen[r]; dup {
@@ -95,8 +98,8 @@ func (c Config) Validate() error {
 	}
 
 	for _, m := range c.Masked {
-		if m.Resource.Resource == "" {
-			return fmt.Errorf("masked entry with group %q has no resource", m.Group)
+		if m.Plural == "" {
+			return fmt.Errorf("masked entry with group %q has no plural", m.Group)
 		}
 		if m.Kind == "" {
 			return fmt.Errorf("masked entry %s has no kind; it is required so Mirage can name the empty list it synthesises", m.Resource)

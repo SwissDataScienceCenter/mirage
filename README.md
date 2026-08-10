@@ -47,15 +47,15 @@ the API server — rather than silently exposing another tenant's namespace.
 ```yaml
 # A cluster-wide request for one of these has the Target Namespace inserted into its path.
 confined:
-  - {group: "",            resource: pods}          # "" is the core group
-  - {group: tekton.dev,    resource: taskruns}
-  - {group: shipwright.io, resource: builds}
-  - {group: shipwright.io, resource: buildruns}
-  - {group: shipwright.io, resource: buildstrategies}
+  - {group: "",            plural: pods}          # "" is the core group
+  - {group: tekton.dev,    plural: taskruns}
+  - {group: shipwright.io, plural: builds}
+  - {group: shipwright.io, plural: buildruns}
+  - {group: shipwright.io, plural: buildstrategies}
 
 # Mirage answers these itself, always as existing but empty. Never forwarded.
 masked:
-  - {group: shipwright.io, resource: clusterbuildstrategies, kind: ClusterBuildStrategy}
+  - {group: shipwright.io, plural: clusterbuildstrategies, kind: ClusterBuildStrategy}
 ```
 
 A resource may appear under one key or the other, never both — Mirage refuses to start otherwise,
@@ -63,10 +63,13 @@ rather than let its behaviour depend on an ordering you cannot see. Listing a cl
 resource under `confined` is refused for the same reason: there is no namespaced path to confine it
 into, so `namespaces` in particular is rejected with a message pointing at `masked` instead.
 
-`resource` is the plural name as it appears in the URL. API versions are deliberately not part of
-the config — an entry applies to every version of that resource, so a controller reading both
-`v1alpha1` and `v1beta1` needs one entry, not two. `kind` is required for masked entries only, so
-Mirage can name the empty list it synthesises (`ClusterBuildStrategyList`).
+`plural` is the lowercase plural name as it appears in the URL and in a CRD's `spec.names.plural` —
+`builds`, not `Build`. That is what a request path carries, so it is what Mirage matches on.
+
+API versions are deliberately not part of the config — an entry applies to every version of that
+resource, so a controller reading both `v1alpha1` and `v1beta1` needs one entry, not two. `kind` is
+required for masked entries only, so Mirage can name the empty list it synthesises
+(`ClusterBuildStrategyList`).
 
 The Target Namespace is always the namespace Mirage's own Pod runs in, read from the projected
 ServiceAccount volume. The Upstream API server is derived from Mirage's own
@@ -94,7 +97,7 @@ metadata:
 data:
   config.yaml: |
     confined:
-      - {group: shipwright.io, resource: builds}
+      - {group: shipwright.io, plural: builds}
       # ... as above
   kubeconfig: |
     apiVersion: v1

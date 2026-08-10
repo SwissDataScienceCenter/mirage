@@ -1,6 +1,6 @@
 confined:
-  - {group: "", resource: pods}
-  - {group: shipwright.io, resource: builds}
+  - {group: "", plural: pods}
+  - {group: shipwright.io, plural: builds}
 
 masked:
-  - {group: shipwright.io, resource: clusterbuildstrategies, kind: ClusterBuildStrategy}
+  - {group: shipwright.io, plural: clusterbuildstrategies, kind: ClusterBuildStrategy}

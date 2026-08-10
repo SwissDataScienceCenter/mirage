@@ -162,7 +162,7 @@ func (h *Handler) status(c *echo.Context, code int, reason, message string, d de
 		Details: &statusDetails{
 			Name:  d.Target.Name,
 			Group: d.Target.Group,
-			Kind:  d.Target.Resource,
+			Kind:  d.Target.Plural,
 		},
 		Code: code,
 	})
@@ -198,9 +198,9 @@ func isWatch(value string) bool {
 // e.g. "clusterbuildstrategies.shipwright.io".
 func qualified(d decide.Decision) string {
 	if d.Target.Group == "" {
-		return d.Target.Resource
+		return d.Target.Plural
 	}
-	return d.Target.Resource + "." + d.Target.Group
+	return d.Target.Plural + "." + d.Target.Group
 }
 
 func apiVersion(d decide.Decision) string {

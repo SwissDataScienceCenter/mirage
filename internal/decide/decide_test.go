@@ -18,12 +18,12 @@ var _ = Describe("Decide", func() {
 	BeforeEach(func() {
 		decider = decide.New(config.Config{
 			Confined: []config.Resource{
-				{Group: "", Resource: "pods"},
-				{Group: "shipwright.io", Resource: "builds"},
+				{Group: "", Plural: "pods"},
+				{Group: "shipwright.io", Plural: "builds"},
 			},
 			Masked: []config.Masked{
 				{
-					Resource: config.Resource{Group: "shipwright.io", Resource: "clusterbuildstrategies"},
+					Resource: config.Resource{Group: "shipwright.io", Plural: "clusterbuildstrategies"},
 					Kind:     "ClusterBuildStrategy",
 				},
 			},
@@ -170,7 +170,7 @@ var _ = Describe("Decide", func() {
 		// Decider built directly. The guard is what keeps the invariant local to
 		// Decide rather than dependent on validation having run.
 		d := decide.New(config.Config{
-			Confined: []config.Resource{{Resource: "namespaces"}},
+			Confined: []config.Resource{{Plural: "namespaces"}},
 		}, targetNamespace)
 
 		got := d.Decide(http.MethodGet, "/api/v1/namespaces")
@@ -193,46 +193,46 @@ var _ = Describe("Parse", func() {
 		},
 
 		Entry("a cluster-wide core collection", "/api/v1/pods",
-			decide.Target{Version: "v1", Resource: "pods", OK: true}),
+			decide.Target{Version: "v1", Plural: "pods", OK: true}),
 
 		Entry("the namespaces collection itself", "/api/v1/namespaces",
-			decide.Target{Version: "v1", Resource: "namespaces", OK: true}),
+			decide.Target{Version: "v1", Plural: "namespaces", OK: true}),
 
 		Entry("a single Namespace object, not a resource within a namespace", "/api/v1/namespaces/tenant-a",
-			decide.Target{Version: "v1", Resource: "namespaces", Name: "tenant-a", OK: true}),
+			decide.Target{Version: "v1", Plural: "namespaces", Name: "tenant-a", OK: true}),
 
 		Entry("a cluster-scoped object", "/api/v1/nodes/node-1",
-			decide.Target{Version: "v1", Resource: "nodes", Name: "node-1", OK: true}),
+			decide.Target{Version: "v1", Plural: "nodes", Name: "node-1", OK: true}),
 
 		Entry("a cluster-scoped subresource spanning several segments", "/api/v1/nodes/node-1/proxy/metrics",
 			decide.Target{
-				Version: "v1", Resource: "nodes", Name: "node-1",
+				Version: "v1", Plural: "nodes", Name: "node-1",
 				Subresource: "proxy/metrics", OK: true,
 			}),
 
 		Entry("a namespaced collection", "/api/v1/namespaces/tenant-a/pods",
-			decide.Target{Version: "v1", Namespace: "tenant-a", Resource: "pods", Namespaced: true, OK: true}),
+			decide.Target{Version: "v1", Namespace: "tenant-a", Plural: "pods", Namespaced: true, OK: true}),
 
 		Entry("a namespaced object", "/api/v1/namespaces/tenant-a/pods/nginx",
 			decide.Target{
-				Version: "v1", Namespace: "tenant-a", Resource: "pods", Name: "nginx",
+				Version: "v1", Namespace: "tenant-a", Plural: "pods", Name: "nginx",
 				Namespaced: true, OK: true,
 			}),
 
 		Entry("a subresource", "/api/v1/namespaces/tenant-a/pods/nginx/log",
 			decide.Target{
-				Version: "v1", Namespace: "tenant-a", Resource: "pods", Name: "nginx",
+				Version: "v1", Namespace: "tenant-a", Plural: "pods", Name: "nginx",
 				Subresource: "log", Namespaced: true, OK: true,
 			}),
 
 		Entry("a namespaced subresource spanning several segments", "/api/v1/namespaces/tenant-a/pods/nginx/proxy/healthz",
 			decide.Target{
-				Version: "v1", Namespace: "tenant-a", Resource: "pods", Name: "nginx",
+				Version: "v1", Namespace: "tenant-a", Plural: "pods", Name: "nginx",
 				Subresource: "proxy/healthz", Namespaced: true, OK: true,
 			}),
 
 		Entry("a grouped collection", "/apis/shipwright.io/v1beta1/builds",
-			decide.Target{Group: "shipwright.io", Version: "v1beta1", Resource: "builds", OK: true}),
+			decide.Target{Group: "shipwright.io", Version: "v1beta1", Plural: "builds", OK: true}),
 
 		// The three entries below share a shape — /api/v1/namespaces/{x}/{y} — and
 		// are told apart only by whether y is a subresource the Namespace object
@@ -240,47 +240,47 @@ var _ = Describe("Parse", func() {
 		Entry("the finalize subresource of a Namespace, not a resource within it",
 			"/api/v1/namespaces/tenant-a/finalize",
 			decide.Target{
-				Version: "v1", Resource: "namespaces", Name: "tenant-a",
+				Version: "v1", Plural: "namespaces", Name: "tenant-a",
 				Subresource: "finalize", OK: true,
 			}),
 
 		Entry("the status subresource of a Namespace", "/api/v1/namespaces/tenant-a/status",
 			decide.Target{
-				Version: "v1", Resource: "namespaces", Name: "tenant-a",
+				Version: "v1", Plural: "namespaces", Name: "tenant-a",
 				Subresource: "status", OK: true,
 			}),
 
 		Entry("a resource whose name merely resembles one", "/api/v1/namespaces/tenant-a/events",
-			decide.Target{Version: "v1", Namespace: "tenant-a", Resource: "events", Namespaced: true, OK: true}),
+			decide.Target{Version: "v1", Namespace: "tenant-a", Plural: "events", Namespaced: true, OK: true}),
 
 		// One segment further and the subresource reading no longer applies: a
 		// Namespace has no sub-subresources, so this is an object within tenant-a.
 		Entry("a longer path starting with a subresource name", "/api/v1/namespaces/tenant-a/status/foo",
 			decide.Target{
-				Version: "v1", Namespace: "tenant-a", Resource: "status", Name: "foo",
+				Version: "v1", Namespace: "tenant-a", Plural: "status", Name: "foo",
 				Namespaced: true, OK: true,
 			}),
 
 		// The legacy watch prefix sits between the version and the shapes above, so
 		// each of these is one of them with Watch set.
 		Entry("a legacy watch of a cluster-wide collection", "/api/v1/watch/pods",
-			decide.Target{Version: "v1", Resource: "pods", Watch: true, OK: true}),
+			decide.Target{Version: "v1", Plural: "pods", Watch: true, OK: true}),
 
 		Entry("a legacy watch of a namespaced collection", "/api/v1/watch/namespaces/tenant-a/pods",
 			decide.Target{
-				Version: "v1", Namespace: "tenant-a", Resource: "pods",
+				Version: "v1", Namespace: "tenant-a", Plural: "pods",
 				Namespaced: true, Watch: true, OK: true,
 			}),
 
 		Entry("a legacy watch of a single Namespace object", "/api/v1/watch/namespaces/tenant-a",
 			decide.Target{
-				Version: "v1", Resource: "namespaces", Name: "tenant-a",
+				Version: "v1", Plural: "namespaces", Name: "tenant-a",
 				Watch: true, OK: true,
 			}),
 
 		Entry("a legacy watch of a grouped collection", "/apis/shipwright.io/v1beta1/watch/builds",
 			decide.Target{
-				Group: "shipwright.io", Version: "v1beta1", Resource: "builds",
+				Group: "shipwright.io", Version: "v1beta1", Plural: "builds",
 				Watch: true, OK: true,
 			}),
 

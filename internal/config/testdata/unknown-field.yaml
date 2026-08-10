@@ -1,2 +1,2 @@
 confined:
-  - {group: shipwright.io, resource: builds, version: v1beta1}
+  - {group: shipwright.io, plural: builds, version: v1beta1}

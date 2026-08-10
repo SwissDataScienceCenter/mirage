@@ -33,10 +33,14 @@ const (
 //	/api/{version}/[watch/][namespaces/{namespace}/]{resource}[/{name}[/{subresource}]]
 //	/apis/{group}/{version}/[watch/][namespaces/{namespace}/]{resource}[/{name}[/{subresource}]]
 type Target struct {
-	Group       string
-	Version     string
-	Namespace   string
-	Resource    string
+	Group     string
+	Version   string
+	Namespace string
+	// Plural is the resource segment of the path, always the lowercase plural —
+	// "pods", "builds". Named to match config.Resource.Plural, which it is looked
+	// up against.
+	Plural string
+	// Name is the object name, empty for a collection.
 	Name        string
 	Subresource string
 
@@ -56,7 +60,7 @@ type Target struct {
 // Ref is the Target's identity for configuration lookup — version deliberately
 // excluded, since a config entry applies to every version of a resource.
 func (t Target) Ref() config.Resource {
-	return config.Resource{Group: t.Group, Resource: t.Resource}
+	return config.Resource{Group: t.Group, Plural: t.Plural}
 }
 
 // Collection reports whether the path addresses a collection rather than a single
@@ -73,7 +77,7 @@ func (t Target) Collection() bool { return t.Name == "" }
 //
 // The group check matters: a CRD named "namespaces" in some other group is an
 // ordinary resource and may well be namespaced.
-func (t Target) Namespaces() bool { return t.Group == "" && t.Resource == namespacesResource }
+func (t Target) Namespaces() bool { return t.Group == "" && t.Plural == namespacesResource }
 
 // namespacesResource is the core Namespace resource, which appears in a path both
 // as a namespace selector and as a resource in its own right.
@@ -140,21 +144,21 @@ func Parse(path string) Target {
 	// the way the API server does — by knowing which subresources the Namespace
 	// object registers.
 	case rest[0] == namespacesResource && len(rest) == 3 && namespaceSubresources[rest[2]]:
-		t.Resource, t.Name, t.Subresource = rest[0], rest[1], rest[2]
+		t.Plural, t.Name, t.Subresource = rest[0], rest[1], rest[2]
 
 	// A "namespaces" segment selects a namespace only when something follows the
 	// namespace name. With nothing after it the path addresses the Namespace
 	// object itself, and falls to the default arm.
 	case rest[0] == namespacesResource && len(rest) >= 3:
 		t.Namespaced, t.Namespace = true, rest[1]
-		t.Resource, t.Name, t.Subresource = parts(rest[2:])
+		t.Plural, t.Name, t.Subresource = parts(rest[2:])
 
 	default:
-		t.Resource, t.Name, t.Subresource = parts(rest)
+		t.Plural, t.Name, t.Subresource = parts(rest)
 	}
 
 	// Reachable from a path carrying empty segments, such as /api/v1//pods.
-	if t.Resource == "" {
+	if t.Plural == "" {
 		return Target{}
 	}
 
@@ -165,15 +169,15 @@ func Parse(path string) Target {
 // parts splits the {resource}[/{name}[/{subresource}]] tail the six shapes share.
 // A subresource can span several segments — pods/{name}/proxy/{path} is one — so
 // it keeps the remainder whole.
-func parts(rest []string) (resource, name, subresource string) {
-	resource = rest[0]
+func parts(rest []string) (plural, name, subresource string) {
+	plural = rest[0]
 	if len(rest) >= 2 {
 		name = rest[1]
 	}
 	if len(rest) >= 3 {
 		subresource = strings.Join(rest[2:], "/")
 	}
-	return resource, name, subresource
+	return plural, name, subresource
 }
 
 // Decision is the outcome for one request.
@@ -277,6 +281,6 @@ func confinedPath(t Target, namespace string) string {
 	b.WriteString("/namespaces/")
 	b.WriteString(namespace)
 	b.WriteByte('/')
-	b.WriteString(t.Resource)
+	b.WriteString(t.Plural)
 	return b.String()
 }

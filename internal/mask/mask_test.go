@@ -33,7 +33,7 @@ var _ = Describe("Handler", func() {
 		decider = decide.New(config.Config{
 			Masked: []config.Masked{
 				{
-					Resource: config.Resource{Group: "shipwright.io", Resource: "clusterbuildstrategies"},
+					Resource: config.Resource{Group: "shipwright.io", Plural: "clusterbuildstrategies"},
 					Kind:     "ClusterBuildStrategy",
 				},
 			},

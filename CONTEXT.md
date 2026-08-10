@@ -58,3 +58,13 @@ _Avoid_: Faked resource, stubbed resource, blocked resource
 To forward a request to Upstream unchanged. The default for any request Mirage is not configured to
 Confine or Mask.
 _Avoid_: Ignore, bypass, proxy verbatim
+
+**Plural**:
+How a resource kind is identified everywhere in Mirage — its lowercase plural name, as it appears in
+a request path and in a CRD's `spec.names.plural`: `builds`, not `Build` or `build`. A Group plus a
+Plural is the whole identity; the API version is deliberately excluded, so one entry covers every
+version of a resource. The plural is used rather than the Kind because the plural is what the URL
+carries, and deriving one from the other means guessing at pluralisation rules only the API server
+can resolve. `kind` appears in configuration for Masked Resources only, and solely to name the empty
+list Mirage synthesises.
+_Avoid_: Resource (as a field name — `Resource.Resource` says nothing), name, type, kind
