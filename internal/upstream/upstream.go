@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"time"
 )
 
 const (
@@ -36,20 +35,30 @@ func Discover() (*url.URL, error) {
 // Transport returns the RoundTripper for talking to Upstream, verifying it
 // against the cluster CA.
 //
-// ResponseHeaderTimeout is deliberately left unset. A WATCH sends its response
-// headers immediately but may then stay silent for minutes, and any timeout here
-// would tear down long-lived watches — the failure mode ADR 0006 is about.
+// It starts from http.DefaultTransport so that dial, handshake and idle-connection
+// timeouts track the stdlib defaults; only the settings below are Mirage's own.
 func Transport(pool *x509.CertPool) http.RoundTripper {
-	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		TLSClientConfig:     &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
-		TLSHandshakeTimeout: 10 * time.Second,
-		MaxIdleConns:        100,
-		IdleConnTimeout:     90 * time.Second,
-		ForceAttemptHTTP2:   true,
-	}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+
+	t.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+
+	// Pinned to zero — no timeout — rather than inherited, so a future change to
+	// http.DefaultTransport cannot introduce one. A WATCH sends its response
+	// headers immediately but may then stay silent for minutes, and any timeout
+	// here would tear down long-lived watches: the failure mode ADR 0006 is about.
+	t.ResponseHeaderTimeout = 0
+
+	// Setting TLSClientConfig disables Go's automatic HTTP/2 upgrade unless this
+	// is set, and without HTTP/2 we lose request multiplexing over a single
+	// connection to the API server.
+	t.ForceAttemptHTTP2 = true
+
+	// Every connection Mirage makes goes to the same host, so the default
+	// per-host cap of 2 — not MaxIdleConns — is the real limit. Two idle
+	// connections means constant re-dial plus TLS handshake on the paths HTTP/2
+	// cannot multiplex, in particular the upgrade requests behind exec, attach
+	// and port-forward.
+	t.MaxIdleConnsPerHost = t.MaxIdleConns
+
+	return t
 }
