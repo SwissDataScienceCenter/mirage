@@ -25,6 +25,7 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -118,6 +119,8 @@ func mirageConfig() config.Config {
 
 var _ = BeforeSuite(func(ctx SpecContext) {
 	startControlPlane()
+	awaitReady(ctx)
+	awaitCustomResourcesServable(ctx)
 	createNamespaces(ctx)
 	grantTargetNamespaceOnly(ctx)
 	startMirage()
@@ -131,6 +134,12 @@ func startControlPlane() {
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("testdata", "crds")},
 		ErrorIfCRDPathMissing: true,
+		// etcd and kube-apiserver's own logs, off by default because they are
+		// thousands of lines and go to stdout rather than the GinkgoWriter, so they
+		// interleave with the spec output rather than nesting under it. Worth it
+		// when the question is why the control plane refused something — an
+		// admission or authorization decision Mirage never sees.
+		AttachControlPlaneOutput: os.Getenv("KUBEBUILDER_ATTACH_CONTROL_PLANE_OUTPUT") == "true",
 	}
 
 	apiServer := testEnv.ControlPlane.GetAPIServer()
@@ -176,6 +185,58 @@ func writeTokenFile() string {
 	line := fmt.Sprintf("%s,%s,%s-uid\n", testToken, testUser, testUser)
 	Expect(os.WriteFile(path, []byte(line), 0o600)).To(Succeed())
 	return path
+}
+
+// awaitReady blocks until the API server reports itself ready.
+//
+// envtest.Start() returns once the control plane answers /healthz, which is
+// earlier than it sounds: the apiserver's post-start hooks are still running —
+// bootstrapping the default RBAC roles, populating discovery — and a request
+// arriving meanwhile is answered 429 with a Retry-After rather than served.
+//
+// client-go retries those transparently, so the symptom is not a failure but a
+// puzzle: only the raw requests through() issues are affected, and they come back
+// 429 where the spec expected a 200 or a 403. Waiting for /readyz, which is only
+// reported once the hooks have finished, removes the race for every client at
+// once and costs nothing after the first pass.
+func awaitReady(ctx context.Context) {
+	GinkgoHelper()
+
+	Eventually(func() error {
+		return adminClient.Discovery().RESTClient().Get().AbsPath("/readyz").Do(ctx).Error()
+	}).WithTimeout(2*time.Minute).WithPolling(200*time.Millisecond).Should(Succeed(),
+		"the API server never became ready")
+}
+
+// awaitCustomResourcesServable blocks until each test CRD will actually answer a
+// request, which is later than /readyz and later than the CRD being Established.
+//
+// envtest installs the CRDs and waits for the Established condition, meaning
+// discovery knows the type. The apiextensions-apiserver then builds the storage
+// for it lazily, and until that finishes every request for the resource is
+// answered:
+//
+//	{"reason":"TooManyRequests","message":"storage is (re)initializing","code":429}
+//
+// client-go retries a 429 with its Retry-After transparently, so the typed and
+// dynamic clients ride straight over this and only the raw requests through()
+// issues can see it — which makes it look like a proxy bug in whichever spec the
+// randomised order happened to run first, rather than the startup race it is.
+//
+// Listing until it succeeds is the check, because "the storage answers a request"
+// is exactly the condition, and no status field reports it.
+func awaitCustomResourcesServable(ctx context.Context) {
+	GinkgoHelper()
+
+	for _, gvr := range []schema.GroupVersionResource{widgetGVR, clusterWidgetGVR} {
+		Eventually(func() error {
+			// Cluster-wide, which is legal for both the namespaced and the
+			// cluster-scoped resource, and Limit keeps it cheap.
+			_, err := adminDynamic.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
+			return err
+		}).WithTimeout(2*time.Minute).WithPolling(200*time.Millisecond).Should(Succeed(),
+			"%s never became servable", gvr)
+	}
 }
 
 func createNamespaces(ctx context.Context) {
@@ -246,7 +307,7 @@ func startMirage() {
 		TargetNamespace: targetNamespace,
 		Upstream:        upstreamURL,
 		Transport:       transport,
-		Logger:          slog.New(slog.NewTextHandler(GinkgoWriter, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Logger:          slog.New(slog.NewTextHandler(GinkgoWriter, &slog.HandlerOptions{Level: mirageLogLevel()})),
 	})
 	Expect(err).NotTo(HaveOccurred())
 
@@ -258,6 +319,23 @@ func startMirage() {
 	DeferCleanup(mirage.Close)
 
 	mirageCfg = &rest.Config{Host: mirage.URL, BearerToken: testToken}
+}
+
+// mirageLogLevel is the level Mirage itself logs at during the suite. Debug by
+// default, which gives one structured line per request naming the decision, the
+// inbound path and the outbound path — the single most useful view when a spec
+// fails, since it says exactly what Mirage did with the URL.
+//
+// Ginkgo buffers that output and prints it only for specs that fail, unless the
+// suite runs with -v. Lower it with MIRAGE_TEST_LOG_LEVEL=info when the volume is
+// getting in the way of reading a -v run.
+func mirageLogLevel() slog.Level {
+	level := slog.LevelDebug
+	if name := os.Getenv("MIRAGE_TEST_LOG_LEVEL"); name != "" {
+		Expect(level.UnmarshalText([]byte(name))).To(Succeed(),
+			"MIRAGE_TEST_LOG_LEVEL must be one of debug, info, warn, error")
+	}
+	return level
 }
 
 // names are unique per spec because `just test` runs --randomize-all and nothing
@@ -335,6 +413,19 @@ func through(ctx context.Context, method, path string, header http.Header) *http
 	DeferCleanup(func() { _ = resp.Body.Close() })
 
 	return resp
+}
+
+// body reads a whole response into a string.
+//
+// Never call it on an open WATCH: the read runs until the server closes the
+// stream, so it would block for the full timeoutSeconds — or forever, if the
+// watch has no timeout. Those specs scan the stream incrementally instead.
+func body(resp *http.Response) string {
+	GinkgoHelper()
+
+	raw, err := io.ReadAll(resp.Body)
+	Expect(err).NotTo(HaveOccurred())
+	return string(raw)
 }
 
 // eventuallyTimeout is generous: the first request of a spec may wait on the API

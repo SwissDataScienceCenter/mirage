@@ -174,5 +174,64 @@ var _ = Describe("Handler", func() {
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(io.ReadAll(rec.Body)).To(BeEmpty())
 		})
+
+		It("ends the initial burst of a WatchList stream with an annotated Bookmark", func() {
+			// client-go 1.32 and later open a WatchList — sendInitialEvents=true —
+			// instead of a LIST followed by a WATCH, and wait for a Bookmark carrying
+			// the k8s.io/initial-events-end annotation before reporting synced. A
+			// masked collection has no initial events, so the Bookmark is the whole
+			// of the burst and goes out immediately.
+			//
+			// Without it the reflector does not fail, it hangs: "awaiting required
+			// bookmark event for initial events stream", every ten seconds, forever,
+			// while the Client's informers never sync. The integration suite found
+			// this; this spec is what keeps it found.
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				defer GinkgoRecover()
+				done <- serve(http.MethodGet,
+					collectionPath+"?watch=true&sendInitialEvents=true&allowWatchBookmarks=true&timeoutSeconds=1", nil)
+			}()
+
+			var rec *httptest.ResponseRecorder
+			Eventually(done, "5s").Should(Receive(&rec))
+			Expect(rec.Code).To(Equal(http.StatusOK))
+
+			var event struct {
+				Type   string `json:"type"`
+				Object struct {
+					Kind     string `json:"kind"`
+					Metadata struct {
+						ResourceVersion string            `json:"resourceVersion"`
+						Annotations     map[string]string `json:"annotations"`
+					} `json:"metadata"`
+				} `json:"object"`
+			}
+			Expect(json.NewDecoder(rec.Body).Decode(&event)).To(Succeed(),
+				"the WatchList stream carried no event at all")
+
+			Expect(event.Type).To(Equal("BOOKMARK"))
+			Expect(event.Object.Kind).To(Equal("ClusterBuildStrategy"))
+			Expect(event.Object.Metadata.ResourceVersion).To(Equal("1"))
+			Expect(event.Object.Metadata.Annotations).To(HaveKeyWithValue("k8s.io/initial-events-end", "true"))
+		})
+
+		It("sends no Bookmark when the Client did not ask for initial events", func() {
+			// The annotation is a synchronisation marker, not decoration. Emitting it
+			// on an ordinary WATCH would tell a reflector its cache is complete when
+			// it never asked and is not waiting.
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				defer GinkgoRecover()
+				done <- serve(http.MethodGet,
+					collectionPath+"?watch=true&allowWatchBookmarks=true&timeoutSeconds=1", nil)
+			}()
+
+			var rec *httptest.ResponseRecorder
+			Eventually(done, "5s").Should(Receive(&rec))
+
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(io.ReadAll(rec.Body)).To(BeEmpty())
+		})
 	})
 })

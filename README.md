@@ -215,3 +215,18 @@ Linux and macOS, no Docker, no root. The Kubernetes version is pinned in the `ju
 
 It deliberately does not skip itself when the binaries are missing — that would be a green tick over
 the one test standing between an Echo upgrade and a silent production failure.
+
+### Verbosity
+
+Extra flags reach Ginkgo, so `just test-integration -vv --focus=RBAC` works. Verbosity comes in
+layers, loudest last:
+
+| | |
+|---|---|
+| *(default)* | Spec names only. Mirage's own logs are captured and printed for failing specs only. |
+| `-v` | Streams Mirage's logs as they happen — one line per request with the decision, the inbound path and the outbound path. Usually the layer you want. |
+| `-vv` | Adds Ginkgo's own node-by-node tracing. |
+| `KUBEBUILDER_ATTACH_CONTROL_PLANE_OUTPUT=true` | `etcd` and `kube-apiserver`'s logs. Thousands of lines, and on stdout rather than nested under the spec, so it interleaves. Reach for it when the question is why the API server refused something Mirage forwarded faithfully. |
+
+`MIRAGE_TEST_LOG_LEVEL` (`debug` by default, as above) turns Mirage's own logging down when its
+volume is what is in the way.

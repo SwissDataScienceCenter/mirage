@@ -40,9 +40,13 @@ envtest:
 #
 # Behind the `integration` build tag, so `just test` neither compiles nor runs it
 # and stays fast. One control plane per suite, so no --procs: the specs share it.
-test-integration:
+#
+# Extra flags go through, e.g. `just test-integration -vv`, or
+# `just test-integration --focus=RBAC`. Ginkgo flags must precede the package
+# path, which is why they are interpolated where they are.
+test-integration *flags="-v":
     KUBEBUILDER_ASSETS="$(just envtest)" \
-        {{ ginkgo }} --tags=integration --randomize-all --race ./test/integration
+        {{ ginkgo }} --tags=integration --randomize-all --race {{ flags }} ./test/integration
 
 # Open the coverage profile written by `just test`.
 coverage: test

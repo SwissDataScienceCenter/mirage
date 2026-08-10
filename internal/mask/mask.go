@@ -35,6 +35,11 @@ const bookmarkInterval = time.Minute
 // server does not speak it for custom resources, and neither do we.
 const protobufMediaType = "application/vnd.kubernetes.protobuf"
 
+// initialEventsEndAnnotation marks the Bookmark that ends the initial burst of a
+// WatchList stream. The annotation is the entire signal: without it a reflector
+// waits for a synchronisation point that never arrives.
+const initialEventsEndAnnotation = "k8s.io/initial-events-end"
+
 // Handler answers requests that Decide classified as Mask.
 type Handler struct {
 	log *slog.Logger
@@ -109,6 +114,30 @@ func (h *Handler) watch(c *echo.Context, d decide.Decision) error {
 	// c.JSON would try to set the status a second time on an already-committed
 	// response.
 	events := json.NewEncoder(res)
+
+	// WatchList. client-go 1.32 and later replace the LIST-then-WATCH pair with a
+	// single WATCH carrying sendInitialEvents=true: the server streams the current
+	// contents as ADDED events and then emits a Bookmark annotated
+	// k8s.io/initial-events-end, which is what tells the reflector its cache is
+	// complete and it may report itself synced.
+	//
+	// A masked collection is empty, so there are no ADDED events to send and the
+	// Bookmark goes out immediately.
+	//
+	// Getting this wrong does not fail — it hangs. The reflector waits for a
+	// synchronisation point that never arrives, logging "awaiting required
+	// bookmark event for initial events stream" every ten seconds while the
+	// Client's informers never sync and its controller never starts. Exactly the
+	// silent failure ADR 0004 is about, and it is the integration suite that
+	// found it.
+	if isWatch(req.URL.Query().Get("sendInitialEvents")) {
+		if err := events.Encode(initialEventsEndBookmark(d)); err != nil {
+			return err
+		}
+		if err := stream.Flush(); err != nil {
+			return err
+		}
+	}
 
 	done := req.Context().Done()
 
@@ -230,8 +259,20 @@ func bookmarkEvent(d decide.Decision) watchEvent {
 	}
 }
 
+// initialEventsEndBookmark is the Bookmark that closes a WatchList stream's
+// initial burst. It is an ordinary Bookmark plus the annotation; the annotation
+// is what the reflector looks for.
+func initialEventsEndBookmark(d decide.Decision) watchEvent {
+	event := bookmarkEvent(d)
+	event.Object.Metadata.Annotations = map[string]string{initialEventsEndAnnotation: "true"}
+	return event
+}
+
 type listMeta struct {
 	ResourceVersion string `json:"resourceVersion"`
+	// Annotations carries the initial-events-end marker on the one Bookmark that
+	// needs it. omitempty, so every other object serialises exactly as before.
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 type list struct {
