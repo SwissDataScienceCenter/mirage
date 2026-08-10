@@ -58,6 +58,16 @@ func (t Target) Ref() config.Resource {
 // object or one of its subresources.
 func (t Target) Collection() bool { return t.Name == "" }
 
+// namespaceSubresources are the subresources the API server registers on the
+// Namespace object. The set is closed, which is what makes the ambiguity in Parse
+// resolvable at all: one segment past a namespace name, a path is either one of
+// these or a resource within that namespace.
+//
+// A CRD whose plural were literally "status" or "finalize" would be misread as a
+// Namespace subresource. The API server has the same conflict and resolves it the
+// same way.
+var namespaceSubresources = map[string]bool{"status": true, "finalize": true}
+
 // Parse breaks a request path into its parts. A path it does not recognise comes
 // back with OK false, which always means Pass Through.
 func Parse(path string) Target {
@@ -80,16 +90,14 @@ func Parse(path string) Target {
 	// the namespace name. /api/v1/namespaces/foo addresses the Namespace object
 	// itself, not a resource within it.
 	//
-	// This is deliberately coarser than the API server, which treats "status" and
-	// "finalize" as subresources of the Namespace object rather than as resources
-	// within it — so it reads /api/v1/namespaces/foo/finalize as Namespace foo,
-	// subresource finalize, where we read it as resource "finalize" in namespace
-	// foo. The two agree on what Mirage does with it: no config entry can name a
-	// resource called "status" or "finalize", so it is Passed Through unchanged
-	// either way, and the namespace segment keeps it out of the warning heuristic.
-	// Worth knowing before adding a rule that keys off Resource alone.
-	if len(rest) >= 3 && rest[0] == "namespaces" {
-		// handle /api/v1/namespaces/{name}/{subresource}
+	// At exactly one segment past the name the two readings have the same shape:
+	// /api/v1/namespaces/foo/finalize is a subresource of Namespace foo, while
+	// /api/v1/namespaces/foo/pods is a collection within namespace foo. Nothing
+	// structural separates them, so this resolves it the way the API server does —
+	// by knowing which subresources the Namespace object registers.
+	if len(rest) >= 3 && rest[0] == "namespaces" &&
+		!(len(rest) == 3 && namespaceSubresources[rest[2]]) { //nolint:staticcheck // QF1001: see above.
+		// handle /api/v1/namespaces/{namespace}/{resource}...
 		t.Namespaced, t.Namespace, rest = true, rest[1], rest[2:]
 	}
 

@@ -105,10 +105,9 @@ var _ = Describe("Decide", func() {
 			http.MethodGet, "/",
 			decide.PassThrough, ""),
 
-		// Parsed as resource "finalize" in tenant-a rather than as a subresource
-		// of the Namespace object, which is not how the API server reads it. It
-		// reaches the same decision regardless: nothing can configure a resource
-		// called "finalize", so it is Passed Through untouched.
+		// Parsed as Namespace tenant-a, subresource finalize. Passed Through
+		// because it names a single object: even with "namespaces" configured as
+		// handled, only a namespace-less collection is ever rewritten.
 		Entry("passes a Namespace subresource through untouched",
 			http.MethodPut, "/api/v1/namespaces/tenant-a/finalize",
 			decide.PassThrough, ""),
@@ -133,8 +132,8 @@ var _ = Describe("Decide", func() {
 		})
 
 		It("stays quiet for a Namespace subresource", func() {
-			// The namespace segment keeps it out of the heuristic, which is what
-			// makes our coarser parse of this path harmless.
+			// It names a single object, so it is not the cluster-wide collection
+			// request the heuristic is looking for.
 			Expect(decider.Decide(http.MethodGet, "/api/v1/namespaces/tenant-a/finalize").Warn).To(BeFalse())
 		})
 	})
@@ -173,14 +172,30 @@ var _ = Describe("Parse", func() {
 		Entry("a grouped collection", "/apis/shipwright.io/v1beta1/builds",
 			decide.Target{Group: "shipwright.io", Version: "v1beta1", Resource: "builds", OK: true}),
 
-		// The API server reads this as the "finalize" subresource of Namespace
-		// tenant-a; we read it as a resource called "finalize" inside tenant-a.
-		// Pinned because it is a real divergence, and harmless only by accident —
-		// see the Decide spec below for the behaviour that actually matters.
-		Entry("a Namespace subresource, which we parse more coarsely than the API server",
+		// The three entries below share a shape — /api/v1/namespaces/{x}/{y} — and
+		// are told apart only by whether y is a subresource the Namespace object
+		// registers. They are pinned together because that is the whole of the rule.
+		Entry("the finalize subresource of a Namespace, not a resource within it",
 			"/api/v1/namespaces/tenant-a/finalize",
 			decide.Target{
-				Version: "v1", Namespace: "tenant-a", Resource: "finalize",
+				Version: "v1", Resource: "namespaces", Name: "tenant-a",
+				Subresource: "finalize", OK: true,
+			}),
+
+		Entry("the status subresource of a Namespace", "/api/v1/namespaces/tenant-a/status",
+			decide.Target{
+				Version: "v1", Resource: "namespaces", Name: "tenant-a",
+				Subresource: "status", OK: true,
+			}),
+
+		Entry("a resource whose name merely resembles one", "/api/v1/namespaces/tenant-a/events",
+			decide.Target{Version: "v1", Namespace: "tenant-a", Resource: "events", Namespaced: true, OK: true}),
+
+		// One segment further and the subresource reading no longer applies: a
+		// Namespace has no sub-subresources, so this is an object within tenant-a.
+		Entry("a longer path starting with a subresource name", "/api/v1/namespaces/tenant-a/status/foo",
+			decide.Target{
+				Version: "v1", Namespace: "tenant-a", Resource: "status", Name: "foo",
 				Namespaced: true, OK: true,
 			}),
 
