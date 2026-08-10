@@ -207,7 +207,8 @@ just test-integration  # Mirage against a real etcd and kube-apiserver
 ```
 
 The integration suite is behind the `integration` build tag, so `just test` neither compiles nor
-runs it. `just test-integration` downloads the control-plane binaries with `setup-envtest` (~150 MB,
+runs it — via the tag plus a `--skip-package`, since `ginkgo -r` discovers suites by filename before
+build constraints apply. `just test-integration` downloads the control-plane binaries with `setup-envtest` (~150 MB,
 cached under `~/.local/share/kubebuilder-envtest`) and puts them on `KUBEBUILDER_ASSETS` for you.
 Linux and macOS, no Docker, no root. The Kubernetes version is pinned in the `justfile`; see
 [ADR 0007](./docs/adr/0007-envtest-for-the-integration-tier.md).

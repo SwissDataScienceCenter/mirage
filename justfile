@@ -20,8 +20,13 @@ build:
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o {{ binary }} ./cmd/mirage
 
 # Run the Ginkgo suites.
+#
+# --skip-package because `-r` finds suites by scanning for _test.go filenames,
+# which happens before build constraints are applied: without it ginkgo tries to
+# compile test/integration and fails with "build constraints exclude all Go
+# files". The tag stops the suite running; this is what stops it being looked at.
 test:
-    {{ ginkgo }} -r --randomize-all --randomize-suites --keep-going --race --cover --coverprofile=coverage.out
+    {{ ginkgo }} -r --skip-package=test/integration --randomize-all --randomize-suites --keep-going --race --cover --coverprofile=coverage.out
 
 # Run the suites under plain `go test`, e.g. `just test-go ./internal/decide`.
 test-go pkg="./...":
@@ -48,6 +53,11 @@ lint: vet golangci-lint
 
 vet:
     go vet ./...
+    # ./... does not reach the integration suite, whose files are all behind the
+    # tag. Vetting needs no envtest binaries, so it runs here rather than being
+    # left to `just test-integration` — otherwise the suite is the one package
+    # nothing lints until someone runs it.
+    go vet -tags=integration ./test/integration
 
 golangci-lint:
     golangci-lint run

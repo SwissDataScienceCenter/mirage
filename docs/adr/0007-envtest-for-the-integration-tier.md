@@ -57,7 +57,13 @@ Raising the floor claim, or proving it, would mean a CI matrix over two versions
 ## The dependency cost, accepted
 
 `controller-runtime` pulls in `client-go`, `k8s.io/api`, `k8s.io/apimachinery` and their transitive
-set, taking the module from 4 direct dependencies to roughly 8 direct and ~40 indirect.
+set, taking the module from 4 direct dependencies to 8, and to 56 indirect.
+
+Worth knowing what that number is not: only 9 of the 56 are `k8s.io` or `sigs.k8s.io` modules. The
+rest is the serialisation, logging and protobuf machinery underneath them. `go mod tidy` also
+*dropped* `fsnotify` and `gomodules.xyz/jsonpatch` on the way in, which is a useful signal — they
+serve `controller-runtime`'s manager and webhook packages, and nothing here imports those. The
+suite's reach into `controller-runtime` is `pkg/envtest` and nothing else.
 
 ADR 0006 makes a point of the short list, so this needs saying plainly: **Go has no test-only
 dependency scope.** These land in `go.mod` permanently, and CI's `git diff --exit-code go.mod
@@ -80,3 +86,21 @@ an Echo upgrade and a silent production outage would stop running with a green t
 binaries are a hard error.
 
 The tag is what keeps `just test` fast — not the skip.
+
+## The tag alone is not enough, and that is not obvious
+
+A build tag governs compilation, not discovery, and three tools discover before they compile:
+
+- `ginkgo -r` finds suites by scanning for `_test.go` **filenames**, so it finds `test/integration`,
+  tries to build it, and fails with "build constraints exclude all Go files". `just test` therefore
+  passes `--skip-package=test/integration`.
+- `go vet ./...` and `go build ./...` treat a directory whose every Go file is excluded as an error
+  rather than a silent skip. `test/integration/doc.go` carries no tag and declares nothing, purely
+  so the package always has one buildable file.
+
+Neither is guesswork worth repeating: both were found by running the commands. If the suite ever
+moves, both need moving with it.
+
+The tagged files are still vetted — `just vet` runs `go vet -tags=integration ./test/integration`
+as a second step, because vetting needs no envtest binaries and the alternative is a package nothing
+lints until someone runs it.

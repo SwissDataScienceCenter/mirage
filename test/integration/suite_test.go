@@ -12,6 +12,10 @@
 // compiles nor runs it. Run it with `just test-integration`, which puts the
 // control-plane binaries on KUBEBUILDER_ASSETS first.
 //
+// The tag is not the whole of it: `ginkgo -r` discovers suites by scanning for
+// _test.go filenames, before build constraints apply, so `just test` also passes
+// --skip-package for this directory. See ADR 0007.
+//
 // There is deliberately no `if KUBEBUILDER_ASSETS == "" { Skip() }` guard. ADR
 // 0006 exists because the streaming behaviour fails silently; a suite that skips
 // itself when its binaries are missing reproduces that exact failure mode in the
