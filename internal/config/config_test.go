@@ -72,6 +72,29 @@ var _ = Describe("Validate", func() {
 		}}.Validate()).NotTo(Succeed())
 	})
 
+	It("rejects handled namespaces, which are cluster-scoped", func() {
+		// Handling means inserting the Target Namespace into the path, and there is
+		// no /api/v1/namespaces/{ns}/namespaces to insert it into.
+		Expect(config.Config{Handled: []config.Resource{
+			{Resource: "namespaces"},
+		}}.Validate()).NotTo(Succeed())
+	})
+
+	It("accepts masked namespaces", func() {
+		// Masking is coherent: the Client simply sees no namespaces at all.
+		Expect(config.Config{Masked: []config.Masked{
+			{Resource: config.Resource{Resource: "namespaces"}, Kind: "Namespace"},
+		}}.Validate()).To(Succeed())
+	})
+
+	It("accepts a handled namespaces resource in another group", func() {
+		// A CRD that happens to be called "namespaces" is an ordinary resource and
+		// may well be namespaced. Only the core one is cluster-scoped.
+		Expect(config.Config{Handled: []config.Resource{
+			{Group: "example.com", Resource: "namespaces"},
+		}}.Validate()).To(Succeed())
+	})
+
 	It("rejects a resource that is both handled and masked", func() {
 		// The two decisions are mutually exclusive; preferring one silently would
 		// make Mirage's behaviour depend on an ordering the Deployer cannot see.

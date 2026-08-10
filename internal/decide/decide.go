@@ -29,8 +29,8 @@ const (
 //
 // Recognised shapes, for the core group and for named groups respectively:
 //
-//	/api/{version}/[namespaces/{namespace}/]{resource}[/{name}[/{subresource}]]
-//	/apis/{group}/{version}/[namespaces/{namespace}/]{resource}[/{name}[/{subresource}]]
+//	/api/{version}/[watch/][namespaces/{namespace}/]{resource}[/{name}[/{subresource}]]
+//	/apis/{group}/{version}/[watch/][namespaces/{namespace}/]{resource}[/{name}[/{subresource}]]
 type Target struct {
 	Group       string
 	Version     string
@@ -43,6 +43,10 @@ type Target struct {
 	// A path without one addresses either the whole cluster or a cluster-scoped
 	// resource; nothing in the path distinguishes the two.
 	Namespaced bool
+	// Watch reports whether the path carried the legacy /watch/ prefix, which is
+	// how a Client asked for a watch before ?watch=true replaced it. A Rewrite has
+	// to put it back, and a Mask has to answer with a stream rather than a list.
+	Watch bool
 	// OK reports whether the path parsed as a resource path at all. Discovery,
 	// /healthz, /openapi and friends do not.
 	OK bool
@@ -57,6 +61,21 @@ func (t Target) Ref() config.Resource {
 // Collection reports whether the path addresses a collection rather than a single
 // object or one of its subresources.
 func (t Target) Collection() bool { return t.Name == "" }
+
+// Namespaces reports whether the path addresses the core Namespace resource.
+//
+// Namespace is cluster-scoped: /api/v1/namespaces/{name} is one Namespace object,
+// and there is no /api/v1/namespaces/{namespace}/namespaces for a cluster-wide
+// request to be rewritten into. Parse already relies on this to read a namespaces
+// segment as a selector; Decide relies on it to refuse a rewrite that cannot exist.
+//
+// The group check matters: a CRD named "namespaces" in some other group is an
+// ordinary resource and may well be namespaced.
+func (t Target) Namespaces() bool { return t.Group == "" && t.Resource == namespacesResource }
+
+// namespacesResource is the core Namespace resource, which appears in a path both
+// as a namespace selector and as a resource in its own right.
+const namespacesResource = "namespaces"
 
 // namespaceSubresources are the subresources the API server registers on the
 // Namespace object. The set is closed, which is what makes the ambiguity in Parse
@@ -73,47 +92,86 @@ var namespaceSubresources = map[string]bool{"status": true, "finalize": true}
 func Parse(path string) Target {
 	segments := strings.Split(strings.Trim(path, "/"), "/")
 
+	// The prefix names the API group and version. Anything else — /healthz,
+	// /openapi/v2, /apis, / — is not a resource path at all.
 	var t Target
 	var rest []string
 	switch {
 	case len(segments) >= 2 && segments[0] == "api":
-		// handle /api/{version}/{rest}
 		t.Version, rest = segments[1], segments[2:]
 	case len(segments) >= 3 && segments[0] == "apis":
-		// handle /api/{group}/{version}/{rest}
 		t.Group, t.Version, rest = segments[1], segments[2], segments[3:]
 	default:
 		return Target{}
 	}
 
-	// A "namespaces" segment is only a namespace selector when something follows
-	// the namespace name. /api/v1/namespaces/foo addresses the Namespace object
-	// itself, not a resource within it.
+	// The legacy watch prefix, deprecated in favour of ?watch=true but still
+	// served. It sits between the version and everything else, so stripping it
+	// here leaves the six shapes below unchanged: /api/v1/watch/namespaces/foo/pods
+	// is the namespaced-collection shape, watched.
 	//
-	// At exactly one segment past the name the two readings have the same shape:
-	// /api/v1/namespaces/foo/finalize is a subresource of Namespace foo, while
-	// /api/v1/namespaces/foo/pods is a collection within namespace foo. Nothing
-	// structural separates them, so this resolves it the way the API server does —
-	// by knowing which subresources the Namespace object registers.
-	if len(rest) >= 3 && rest[0] == "namespaces" &&
-		!(len(rest) == 3 && namespaceSubresources[rest[2]]) { //nolint:staticcheck // QF1001: see above.
-		// handle /api/v1/namespaces/{namespace}/{resource}...
-		t.Namespaced, t.Namespace, rest = true, rest[1], rest[2:]
+	// A CRD whose plural were literally "watch" would be misread, the same trade
+	// namespaceSubresources makes.
+	if len(rest) > 0 && rest[0] == "watch" {
+		t.Watch, rest = true, rest[1:]
 	}
 
-	if len(rest) == 0 || rest[0] == "" {
+	// What remains is one of six shapes. The three with a namespace selector and
+	// the three without share the same {resource}[/{name}[/{subresource}]] tail,
+	// which is what parts handles for both arms below.
+	//
+	//	{resource}                                  /api/v1/pods
+	//	{resource}/{name}                           /api/v1/nodes/node-1
+	//	{resource}/{name}/{subresource...}          /api/v1/nodes/node-1/proxy/metrics
+	//	namespaces/{ns}/{resource}                  /api/v1/namespaces/foo/pods
+	//	namespaces/{ns}/{resource}/{name}           /api/v1/namespaces/foo/pods/nginx
+	//	namespaces/{ns}/{resource}/{name}/{sub...}  /api/v1/namespaces/foo/pods/nginx/log
+	//
+	// /api/v1/namespaces and /api/v1/namespaces/foo need no arm of their own: they
+	// are the first two shapes, with "namespaces" as an ordinary resource.
+	switch {
+	case len(rest) == 0:
+		return Target{}
+
+	// The one place two shapes collide. namespaces/{name}/{status|finalize} and
+	// namespaces/{ns}/{resource} are structurally identical, so this resolves it
+	// the way the API server does — by knowing which subresources the Namespace
+	// object registers.
+	case rest[0] == namespacesResource && len(rest) == 3 && namespaceSubresources[rest[2]]:
+		t.Resource, t.Name, t.Subresource = rest[0], rest[1], rest[2]
+
+	// A "namespaces" segment selects a namespace only when something follows the
+	// namespace name. With nothing after it the path addresses the Namespace
+	// object itself, and falls to the default arm.
+	case rest[0] == namespacesResource && len(rest) >= 3:
+		t.Namespaced, t.Namespace = true, rest[1]
+		t.Resource, t.Name, t.Subresource = parts(rest[2:])
+
+	default:
+		t.Resource, t.Name, t.Subresource = parts(rest)
+	}
+
+	// Reachable from a path carrying empty segments, such as /api/v1//pods.
+	if t.Resource == "" {
 		return Target{}
 	}
 
 	t.OK = true
-	t.Resource = rest[0]
+	return t
+}
+
+// parts splits the {resource}[/{name}[/{subresource}]] tail the six shapes share.
+// A subresource can span several segments — pods/{name}/proxy/{path} is one — so
+// it keeps the remainder whole.
+func parts(rest []string) (resource, name, subresource string) {
+	resource = rest[0]
 	if len(rest) >= 2 {
-		t.Name = rest[1]
+		name = rest[1]
 	}
 	if len(rest) >= 3 {
-		t.Subresource = strings.Join(rest[2:], "/")
+		subresource = strings.Join(rest[2:], "/")
 	}
-	return t
+	return resource, name, subresource
 }
 
 // Decision is the outcome for one request.
@@ -175,7 +233,11 @@ func (d *Decider) Decide(method, path string) Decision {
 		// left alone, so the API server stays the one deciding whether it is
 		// allowed. Single-object and subresource paths cannot be namespace-less
 		// for a namespaced resource, so they are left alone too.
-		if !t.Namespaced && t.Collection() {
+		//
+		// Namespaces is excluded because no such path exists to rewrite into.
+		// config.Validate rejects it before startup, so this only guards a Decider
+		// built from an unvalidated Config.
+		if !t.Namespaced && t.Collection() && !t.Namespaces() {
 			dec.Action = Rewrite
 			dec.Path = namespacedPath(t, d.namespace)
 		}
@@ -184,7 +246,11 @@ func (d *Decider) Decide(method, path string) Decision {
 
 	// Unconfigured. Pass it through, but say so if it looks like the request a
 	// missing handled entry would produce.
-	dec.Warn = method == http.MethodGet && !t.Namespaced && t.Collection()
+	//
+	// Never for Namespaces: it is cluster-scoped, so `handled` is not the fix and
+	// suggesting it would send the Deployer towards a configuration Mirage refuses
+	// to start with. A Client that lists namespaces wants `masked` or nothing.
+	dec.Warn = method == http.MethodGet && !t.Namespaced && t.Collection() && !t.Namespaces()
 	return dec
 }
 
@@ -201,6 +267,10 @@ func namespacedPath(t Target, namespace string) string {
 		b.WriteByte('/')
 	}
 	b.WriteString(t.Version)
+	// Dropping this would turn the Client's watch into a one-shot list.
+	if t.Watch {
+		b.WriteString("/watch")
+	}
 	b.WriteString("/namespaces/")
 	b.WriteString(namespace)
 	b.WriteByte('/')

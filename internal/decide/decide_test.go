@@ -53,6 +53,20 @@ var _ = Describe("Decide", func() {
 			http.MethodGet, "/apis/shipwright.io/v1beta1/builds",
 			decide.Rewrite, "/apis/shipwright.io/v1beta1/namespaces/tenant-a/builds"),
 
+		// The watch prefix has to survive the rewrite. Without it the Client asked
+		// for a stream and would get a single list instead.
+		Entry("keeps the legacy watch prefix when inserting the Target Namespace",
+			http.MethodGet, "/api/v1/watch/pods",
+			decide.Rewrite, "/api/v1/watch/namespaces/tenant-a/pods"),
+
+		Entry("keeps the legacy watch prefix on a grouped resource",
+			http.MethodGet, "/apis/shipwright.io/v1beta1/watch/builds",
+			decide.Rewrite, "/apis/shipwright.io/v1beta1/watch/namespaces/tenant-a/builds"),
+
+		Entry("leaves a legacy watch that already names the Target Namespace alone",
+			http.MethodGet, "/api/v1/watch/namespaces/tenant-a/pods",
+			decide.PassThrough, ""),
+
 		Entry("applies a config entry to every version of the resource",
 			http.MethodGet, "/apis/shipwright.io/v1alpha1/builds",
 			decide.Rewrite, "/apis/shipwright.io/v1alpha1/namespaces/tenant-a/builds"),
@@ -127,6 +141,11 @@ var _ = Describe("Decide", func() {
 			Expect(decider.Decide(http.MethodGet, "/apis/shipwright.io/v1beta1/builds").Warn).To(BeFalse())
 		})
 
+		It("warns about a legacy watch of an unconfigured cluster-wide collection", func() {
+			// The same missing-entry signature, spelled the older way.
+			Expect(decider.Decide(http.MethodGet, "/apis/tekton.dev/v1/watch/taskruns").Warn).To(BeTrue())
+		})
+
 		It("stays quiet for a named cluster-scoped object", func() {
 			Expect(decider.Decide(http.MethodGet, "/api/v1/nodes/node-1").Warn).To(BeFalse())
 		})
@@ -136,6 +155,28 @@ var _ = Describe("Decide", func() {
 			// request the heuristic is looking for.
 			Expect(decider.Decide(http.MethodGet, "/api/v1/namespaces/tenant-a/finalize").Warn).To(BeFalse())
 		})
+
+		It("stays quiet for the namespaces collection", func() {
+			// It has the shape the heuristic looks for, but `handled` is not the fix
+			// — namespaces is cluster-scoped, and config.Validate refuses it. Warning
+			// here would point the Deployer at a configuration Mirage will not start
+			// with.
+			Expect(decider.Decide(http.MethodGet, "/api/v1/namespaces").Warn).To(BeFalse())
+		})
+	})
+
+	It("refuses to rewrite namespaces even when told to handle them", func() {
+		// config.Validate rejects this configuration, so it can only arise from a
+		// Decider built directly. The guard is what keeps the invariant local to
+		// Decide rather than dependent on validation having run.
+		d := decide.New(config.Config{
+			Handled: []config.Resource{{Resource: "namespaces"}},
+		}, targetNamespace)
+
+		got := d.Decide(http.MethodGet, "/api/v1/namespaces")
+
+		Expect(got.Action).To(Equal(decide.PassThrough))
+		Expect(got.Path).To(Equal("/api/v1/namespaces"))
 	})
 
 	It("carries the configured Kind on a Mask decision", func() {
@@ -160,13 +201,34 @@ var _ = Describe("Parse", func() {
 		Entry("a single Namespace object, not a resource within a namespace", "/api/v1/namespaces/tenant-a",
 			decide.Target{Version: "v1", Resource: "namespaces", Name: "tenant-a", OK: true}),
 
+		Entry("a cluster-scoped object", "/api/v1/nodes/node-1",
+			decide.Target{Version: "v1", Resource: "nodes", Name: "node-1", OK: true}),
+
+		Entry("a cluster-scoped subresource spanning several segments", "/api/v1/nodes/node-1/proxy/metrics",
+			decide.Target{
+				Version: "v1", Resource: "nodes", Name: "node-1",
+				Subresource: "proxy/metrics", OK: true,
+			}),
+
 		Entry("a namespaced collection", "/api/v1/namespaces/tenant-a/pods",
 			decide.Target{Version: "v1", Namespace: "tenant-a", Resource: "pods", Namespaced: true, OK: true}),
+
+		Entry("a namespaced object", "/api/v1/namespaces/tenant-a/pods/nginx",
+			decide.Target{
+				Version: "v1", Namespace: "tenant-a", Resource: "pods", Name: "nginx",
+				Namespaced: true, OK: true,
+			}),
 
 		Entry("a subresource", "/api/v1/namespaces/tenant-a/pods/nginx/log",
 			decide.Target{
 				Version: "v1", Namespace: "tenant-a", Resource: "pods", Name: "nginx",
 				Subresource: "log", Namespaced: true, OK: true,
+			}),
+
+		Entry("a namespaced subresource spanning several segments", "/api/v1/namespaces/tenant-a/pods/nginx/proxy/healthz",
+			decide.Target{
+				Version: "v1", Namespace: "tenant-a", Resource: "pods", Name: "nginx",
+				Subresource: "proxy/healthz", Namespaced: true, OK: true,
 			}),
 
 		Entry("a grouped collection", "/apis/shipwright.io/v1beta1/builds",
@@ -199,8 +261,41 @@ var _ = Describe("Parse", func() {
 				Namespaced: true, OK: true,
 			}),
 
+		// The legacy watch prefix sits between the version and the shapes above, so
+		// each of these is one of them with Watch set.
+		Entry("a legacy watch of a cluster-wide collection", "/api/v1/watch/pods",
+			decide.Target{Version: "v1", Resource: "pods", Watch: true, OK: true}),
+
+		Entry("a legacy watch of a namespaced collection", "/api/v1/watch/namespaces/tenant-a/pods",
+			decide.Target{
+				Version: "v1", Namespace: "tenant-a", Resource: "pods",
+				Namespaced: true, Watch: true, OK: true,
+			}),
+
+		Entry("a legacy watch of a single Namespace object", "/api/v1/watch/namespaces/tenant-a",
+			decide.Target{
+				Version: "v1", Resource: "namespaces", Name: "tenant-a",
+				Watch: true, OK: true,
+			}),
+
+		Entry("a legacy watch of a grouped collection", "/apis/shipwright.io/v1beta1/watch/builds",
+			decide.Target{
+				Group: "shipwright.io", Version: "v1beta1", Resource: "builds",
+				Watch: true, OK: true,
+			}),
+
+		Entry("the watch prefix with nothing after it", "/api/v1/watch", decide.Target{}),
+
+		Entry("core discovery", "/api/v1", decide.Target{}),
+		Entry("group discovery", "/apis/shipwright.io/v1beta1", decide.Target{}),
+		Entry("the API group list", "/apis", decide.Target{}),
 		Entry("a group without a version", "/apis/shipwright.io", decide.Target{}),
 		Entry("a non-API path", "/healthz", decide.Target{}),
 		Entry("the root path", "/", decide.Target{}),
+
+		// An empty segment leaves no resource to name, so there is nothing to
+		// decide about and the path goes Upstream untouched.
+		Entry("a path with an empty segment", "/api/v1//pods", decide.Target{}),
+		Entry("an empty segment where the resource belongs", "/api/v1/namespaces/tenant-a//pods", decide.Target{}),
 	)
 })

@@ -156,5 +156,23 @@ var _ = Describe("Handler", func() {
 			// No events, ever.
 			Expect(io.ReadAll(rec.Body)).To(BeEmpty())
 		})
+
+		It("recognises the legacy /watch/ path prefix, not only ?watch=true", func() {
+			// Same request spelled the older way. Answering it as a LIST would put a
+			// JSON list on a connection the Client is reading as an event stream.
+			legacy := "/apis/shipwright.io/v1beta1/watch/clusterbuildstrategies?timeoutSeconds=1"
+
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				defer GinkgoRecover()
+				done <- serve(http.MethodGet, legacy, nil)
+			}()
+
+			var rec *httptest.ResponseRecorder
+			Eventually(done, "5s").Should(Receive(&rec))
+
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(io.ReadAll(rec.Body)).To(BeEmpty())
+		})
 	})
 })

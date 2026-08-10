@@ -63,7 +63,10 @@ func (h *Handler) Handle(c *echo.Context, d decide.Decision) error {
 			// The resource exists but holds nothing, so any named object is absent.
 			return h.status(c, http.StatusNotFound, "NotFound",
 				qualified(d)+` "`+d.Target.Name+`" not found`, d)
-		case isWatch(req.URL.Query().Get("watch")):
+		// Either spelling: ?watch=true, or the legacy /watch/ path prefix the
+		// Target carries. Answering a legacy-path watch with a list would hand the
+		// Client a body it is not parsing for.
+		case d.Target.Watch || isWatch(req.URL.Query().Get("watch")):
 			return h.watch(c, d)
 		default:
 			return c.JSON(http.StatusOK, emptyList(d))

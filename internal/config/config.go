@@ -76,6 +76,15 @@ func (c Config) Validate() error {
 		if r.Resource == "" {
 			return fmt.Errorf("handled entry with group %q has no resource", r.Group)
 		}
+		// Handling means inserting the Target Namespace into the path, which is
+		// meaningless for a cluster-scoped resource. Namespaces is the one case
+		// Mirage can recognise on its own, and the one a Deployer is most likely to
+		// reach for, so it is refused with a reason rather than accepted and
+		// rewritten into a path the API server does not serve. Masking it is a
+		// coherent choice and remains allowed.
+		if r.Group == "" && r.Resource == "namespaces" {
+			return fmt.Errorf("namespaces cannot be handled: it is cluster-scoped, so there is no namespaced path to rewrite it into; mask it instead if the Client should see none")
+		}
 		if where, dup := seen[r]; dup {
 			return fmt.Errorf("resource %s appears in both handled and %s", r, where)
 		}
