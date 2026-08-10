@@ -1,0 +1,33 @@
+# A cluster-scoped custom resource, standing in for Shipwright's
+# ClusterBuildStrategy. It is the Masked Resource the suite exercises.
+#
+# It is installed deliberately. Discovery is Passed Through, so a Masked Resource
+# whose CRD is absent Upstream is absent from discovery too, and a typed client's
+# RESTMapper fails to resolve it before it ever issues a request Mirage could
+# answer. Masking only works when the CRD exists cluster-wide and the Deployer
+# merely cannot read it — the Shipwright situation, and the one modelled here.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterwidgets.mirage.test
+spec:
+  group: mirage.test
+  scope: Cluster
+  names:
+    kind: ClusterWidget
+    listKind: ClusterWidgetList
+    plural: clusterwidgets
+    singular: clusterwidget
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                note:
+                  type: string

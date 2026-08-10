@@ -175,6 +175,11 @@ the API server, and controller-runtime's leader election finds its namespace by 
 - **Masking works for custom resources only.** Mirage answers masked requests in JSON and returns
   `406` for protobuf, mirroring how the API server treats CRDs. Built-in types, where client-go
   negotiates protobuf and will not fall back, would need protobuf support first.
+- **Masking requires the CRD to exist in the cluster.** Discovery is Passed Through, so a Masked
+  Resource whose CRD is not installed does not appear in discovery either — a typed client's
+  RESTMapper cannot resolve the type and errors before it ever issues a request Mirage could answer.
+  Masking works when the resource exists cluster-wide and the Deployer merely cannot read it, which
+  is the Shipwright case. It is not a way to invent a resource the cluster has never heard of.
 - **Cluster-scoped resources you actually need cannot be faked.** Masking tells the Client the
   resource is empty. For Shipwright specifically this means every Build in the namespace must use
   `kind: BuildStrategy`; a Build referencing a `ClusterBuildStrategy` will never resolve its
@@ -191,3 +196,21 @@ and the outbound path.
 
 If the Client is getting unexplained `403`s, look for Mirage's warnings about cluster-wide requests
 that were passed through: that is the signature of a resource missing from `confined`.
+
+## Development
+
+`just` lists everything. Two test tiers:
+
+```sh
+just test              # the unit suites — fast, no external anything
+just test-integration  # Mirage against a real etcd and kube-apiserver
+```
+
+The integration suite is behind the `integration` build tag, so `just test` neither compiles nor
+runs it. `just test-integration` downloads the control-plane binaries with `setup-envtest` (~150 MB,
+cached under `~/.local/share/kubebuilder-envtest`) and puts them on `KUBEBUILDER_ASSETS` for you.
+Linux and macOS, no Docker, no root. The Kubernetes version is pinned in the `justfile`; see
+[ADR 0007](./docs/adr/0007-envtest-for-the-integration-tier.md).
+
+It deliberately does not skip itself when the binaries are missing — that would be a green tick over
+the one test standing between an Echo upgrade and a silent production failure.

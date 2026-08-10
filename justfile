@@ -3,6 +3,11 @@ image := "ghcr.io/SwissDataScienceCenter/mirage"
 tag := "dev"
 ginkgo := "go tool ginkgo"
 
+# The Kubernetes version the integration suite runs against. Pinned deliberately:
+# the README claims 1.29+, so the version the suite proves is a choice to record
+# rather than a default to inherit. See ADR 0007.
+k8s_version := "1.34.1"
+
 # Show the available recipes.
 default:
     @just --list
@@ -21,6 +26,18 @@ test:
 # Run the suites under plain `go test`, e.g. `just test-go ./internal/decide`.
 test-go pkg="./...":
     go test -race {{ pkg }}
+
+# Download the envtest control-plane binaries and print where they landed.
+envtest:
+    @go tool setup-envtest use {{ k8s_version }} -p path
+
+# Run the integration suite against a real etcd and kube-apiserver.
+#
+# Behind the `integration` build tag, so `just test` neither compiles nor runs it
+# and stays fast. One control plane per suite, so no --procs: the specs share it.
+test-integration:
+    KUBEBUILDER_ASSETS="$(just envtest)" \
+        {{ ginkgo }} --tags=integration --randomize-all --race ./test/integration
 
 # Open the coverage profile written by `just test`.
 coverage: test
