@@ -108,7 +108,7 @@ func (c Config) LogValue() slog.Value {
 	}
 	masked := make([]string, 0, len(c.Masked))
 	for _, m := range c.Masked {
-		masked = append(masked, m.Resource.String()+" as "+m.Kind)
+		masked = append(masked, m.String()+" as "+m.Kind)
 	}
 	return slog.GroupValue(
 		slog.Any("handled", handled),

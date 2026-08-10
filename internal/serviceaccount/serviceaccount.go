@@ -34,7 +34,7 @@ func (d Dir) Namespace() (string, error) {
 	}
 	ns := strings.TrimSpace(string(raw))
 	if ns == "" {
-		return "", fmt.Errorf("Target Namespace file %s is empty", path)
+		return "", fmt.Errorf("target Namespace file %s is empty", path)
 	}
 	return ns, nil
 }
