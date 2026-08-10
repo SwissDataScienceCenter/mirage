@@ -40,6 +40,8 @@ func (d Dir) Namespace() (string, error) {
 }
 
 // CertPool returns the cluster CA bundle, used to verify Upstream.
+// Without this we have to either add the cluster certs into the system CA certs.
+// Or, we would have to add InsecureSkipVerify to ignore verifying certs.
 func (d Dir) CertPool() (*x509.CertPool, error) {
 	path := filepath.Join(string(d), "ca.crt")
 	pem, err := os.ReadFile(path)

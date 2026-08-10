@@ -67,8 +67,10 @@ func Parse(path string) Target {
 	var rest []string
 	switch {
 	case len(segments) >= 2 && segments[0] == "api":
+		// handle /api/{version}/{rest}
 		t.Version, rest = segments[1], segments[2:]
 	case len(segments) >= 3 && segments[0] == "apis":
+		// handle /api/{group}/{version}/{rest}
 		t.Group, t.Version, rest = segments[1], segments[2], segments[3:]
 	default:
 		return Target{}
@@ -87,6 +89,7 @@ func Parse(path string) Target {
 	// either way, and the namespace segment keeps it out of the warning heuristic.
 	// Worth knowing before adding a rule that keys off Resource alone.
 	if len(rest) >= 3 && rest[0] == "namespaces" {
+		// handle /api/v1/namespaces/{name}/{subresource}
 		t.Namespaced, t.Namespace, rest = true, rest[1], rest[2:]
 	}
 
