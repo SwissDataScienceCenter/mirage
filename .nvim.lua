@@ -1,0 +1,27 @@
+-- Neovim project-local settings, loaded when 'exrc' is on.
+--
+-- The integration suite in test/integration is behind `//go:build integration`
+-- (see docs/adr/0007-envtest-for-the-integration-tier.md). Without the tag gopls
+-- excludes every file in that package from the build, so the whole suite shows up
+-- as one "excluded from build" error with no completion, no go-to-definition and
+-- no diagnostics.
+--
+-- GOFLAGS rather than gopls's own `buildFlags` setting, because it works whatever
+-- the LSP is wired up with — gopls inherits the environment and passes it to the
+-- go commands it runs underneath.
+--
+-- To use this, in your own Neovim config:
+--
+--     vim.o.exrc = true
+--
+-- then reopen the project and answer `:trust` when prompted. Neovim will not run
+-- a project-local file until you have said so once.
+--
+-- Side effect worth knowing: any `go` command run from inside Neovim inherits the
+-- tag too, including a `:!just test`. Harmless — `just test` skips the package by
+-- name anyway — but it means the build is not quite the one a plain shell gets.
+-- If that bothers you, drop this and set the equivalent in your gopls config:
+--
+--     settings = { gopls = { buildFlags = { "-tags=integration" } } }
+
+vim.env.GOFLAGS = "-tags=integration"
