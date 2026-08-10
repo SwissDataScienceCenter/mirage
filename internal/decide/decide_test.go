@@ -17,7 +17,7 @@ var _ = Describe("Decide", func() {
 
 	BeforeEach(func() {
 		decider = decide.New(config.Config{
-			Handled: []config.Resource{
+			Confined: []config.Resource{
 				{Group: "", Resource: "pods"},
 				{Group: "shipwright.io", Resource: "builds"},
 			},
@@ -45,23 +45,23 @@ var _ = Describe("Decide", func() {
 			}
 		},
 
-		Entry("inserts the Target Namespace into a cluster-wide collection of a handled core resource",
+		Entry("inserts the Target Namespace into a cluster-wide collection of a confined core resource",
 			http.MethodGet, "/api/v1/pods",
-			decide.Rewrite, "/api/v1/namespaces/tenant-a/pods"),
+			decide.Confine, "/api/v1/namespaces/tenant-a/pods"),
 
-		Entry("inserts the Target Namespace into a cluster-wide collection of a handled grouped resource",
+		Entry("inserts the Target Namespace into a cluster-wide collection of a confined grouped resource",
 			http.MethodGet, "/apis/shipwright.io/v1beta1/builds",
-			decide.Rewrite, "/apis/shipwright.io/v1beta1/namespaces/tenant-a/builds"),
+			decide.Confine, "/apis/shipwright.io/v1beta1/namespaces/tenant-a/builds"),
 
 		// The watch prefix has to survive the rewrite. Without it the Client asked
 		// for a stream and would get a single list instead.
 		Entry("keeps the legacy watch prefix when inserting the Target Namespace",
 			http.MethodGet, "/api/v1/watch/pods",
-			decide.Rewrite, "/api/v1/watch/namespaces/tenant-a/pods"),
+			decide.Confine, "/api/v1/watch/namespaces/tenant-a/pods"),
 
 		Entry("keeps the legacy watch prefix on a grouped resource",
 			http.MethodGet, "/apis/shipwright.io/v1beta1/watch/builds",
-			decide.Rewrite, "/apis/shipwright.io/v1beta1/watch/namespaces/tenant-a/builds"),
+			decide.Confine, "/apis/shipwright.io/v1beta1/watch/namespaces/tenant-a/builds"),
 
 		Entry("leaves a legacy watch that already names the Target Namespace alone",
 			http.MethodGet, "/api/v1/watch/namespaces/tenant-a/pods",
@@ -69,7 +69,7 @@ var _ = Describe("Decide", func() {
 
 		Entry("applies a config entry to every version of the resource",
 			http.MethodGet, "/apis/shipwright.io/v1alpha1/builds",
-			decide.Rewrite, "/apis/shipwright.io/v1alpha1/namespaces/tenant-a/builds"),
+			decide.Confine, "/apis/shipwright.io/v1alpha1/namespaces/tenant-a/builds"),
 
 		Entry("leaves an explicit Target Namespace alone, it is already correct",
 			http.MethodGet, "/apis/shipwright.io/v1beta1/namespaces/tenant-a/builds",
@@ -121,7 +121,7 @@ var _ = Describe("Decide", func() {
 
 		// Parsed as Namespace tenant-a, subresource finalize. Passed Through
 		// because it names a single object: even with "namespaces" configured as
-		// handled, only a namespace-less collection is ever rewritten.
+		// confined, only a namespace-less collection is ever confined.
 		Entry("passes a Namespace subresource through untouched",
 			http.MethodPut, "/api/v1/namespaces/tenant-a/finalize",
 			decide.PassThrough, ""),
@@ -129,7 +129,7 @@ var _ = Describe("Decide", func() {
 
 	Describe("the warning heuristic", func() {
 		It("warns about a cluster-wide collection of an unconfigured resource", func() {
-			// The signature of a resource missing from `handled`.
+			// The signature of a resource missing from `confined`.
 			Expect(decider.Decide(http.MethodGet, "/apis/tekton.dev/v1/taskruns").Warn).To(BeTrue())
 		})
 
@@ -137,7 +137,7 @@ var _ = Describe("Decide", func() {
 			Expect(decider.Decide(http.MethodGet, "/apis/tekton.dev/v1/namespaces/tenant-a/taskruns").Warn).To(BeFalse())
 		})
 
-		It("stays quiet when the resource is handled", func() {
+		It("stays quiet when the resource is confined", func() {
 			Expect(decider.Decide(http.MethodGet, "/apis/shipwright.io/v1beta1/builds").Warn).To(BeFalse())
 		})
 
@@ -157,7 +157,7 @@ var _ = Describe("Decide", func() {
 		})
 
 		It("stays quiet for the namespaces collection", func() {
-			// It has the shape the heuristic looks for, but `handled` is not the fix
+			// It has the shape the heuristic looks for, but `confined` is not the fix
 			// — namespaces is cluster-scoped, and config.Validate refuses it. Warning
 			// here would point the Deployer at a configuration Mirage will not start
 			// with.
@@ -165,12 +165,12 @@ var _ = Describe("Decide", func() {
 		})
 	})
 
-	It("refuses to rewrite namespaces even when told to handle them", func() {
+	It("refuses to confine namespaces even when told to confine them", func() {
 		// config.Validate rejects this configuration, so it can only arise from a
 		// Decider built directly. The guard is what keeps the invariant local to
 		// Decide rather than dependent on validation having run.
 		d := decide.New(config.Config{
-			Handled: []config.Resource{{Resource: "namespaces"}},
+			Confined: []config.Resource{{Resource: "namespaces"}},
 		}, targetNamespace)
 
 		got := d.Decide(http.MethodGet, "/api/v1/namespaces")

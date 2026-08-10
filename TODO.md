@@ -21,13 +21,13 @@ Open items from the design session. The design itself is settled — see
 - [ ] **Drop the `events` entry from the starting config unless something needs it.** It was
       included speculatively. Shipwright writes events through a recorder, which is a namespaced
       POST that passes through fine, and no cluster-wide event LIST was found in its source. A
-      spurious `handled` entry is harmless but misleading about what the Client actually does.
+      spurious `confined` entry is harmless but misleading about what the Client actually does.
 
 ## Implementation
 
 Nothing is built yet. In rough dependency order:
 
-- [ ] `decide(method, path) → PassThrough | Rewrite | Mask` as a pure function, with table-driven
+- [ ] `decide(method, path) → PassThrough | Confine | Mask` as a pure function, with table-driven
       tests covering the boundaries: insert-if-absent, explicit foreign namespace left untouched,
       unconfigured resources passed through, single-object and subresource paths untouched.
 - [ ] Config loading and the startup log line that echoes the resolved config back.

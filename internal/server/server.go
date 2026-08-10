@@ -50,7 +50,7 @@ func New(o Options) (*echo.Echo, error) {
 		// Rewrite and RegexRewrite are deliberately empty. They are static
 		// patterns and cannot express Mirage's rule, which depends on the
 		// configuration and on whether the path already names a namespace. The
-		// decide middleware does the rewriting instead.
+		// deciding middleware edits the path instead.
 	}.ToMiddleware()
 	if err != nil {
 		return nil, err
@@ -66,8 +66,8 @@ func New(o Options) (*echo.Echo, error) {
 }
 
 // Deciding classifies each request and acts on it: it answers Masked Resources
-// itself, rewrites the path for Handled Resources, and otherwise leaves the
-// request exactly as it arrived.
+// itself, confines Confined Resources to the Target Namespace, and otherwise
+// leaves the request exactly as it arrived.
 func Deciding(d *decide.Decider, m *mask.Handler, log *slog.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
@@ -76,10 +76,10 @@ func Deciding(d *decide.Decider, m *mask.Handler, log *slog.Logger) echo.Middlew
 			dec := d.Decide(req.Method, inbound)
 
 			if dec.Warn {
-				// The signature of a resource missing from `handled`: a
+				// The signature of a resource missing from `confined`: a
 				// cluster-wide collection request Mirage was not told about, on
 				// its way to a 403 the Client will not explain.
-				log.Warn("cluster-wide request passed through unchanged; if the Client is getting 403s, this resource may be missing from `handled`",
+				log.Warn("cluster-wide request passed through unchanged; if the Client is getting 403s, this resource may be missing from `confined`",
 					slog.String("method", req.Method),
 					slog.String("path", inbound),
 				)
@@ -95,7 +95,7 @@ func Deciding(d *decide.Decider, m *mask.Handler, log *slog.Logger) echo.Middlew
 			switch dec.Action {
 			case decide.Mask:
 				return m.Handle(c, dec)
-			case decide.Rewrite:
+			case decide.Confine:
 				req.URL.Path = dec.Path
 				// Clear RawPath so EscapedPath() re-derives the encoding from the
 				// new Path rather than serving the stale original.

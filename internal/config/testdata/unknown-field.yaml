@@ -1,2 +1,2 @@
-handled:
+confined:
   - {group: shipwright.io, resource: builds, version: v1beta1}

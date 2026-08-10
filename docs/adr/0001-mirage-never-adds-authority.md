@@ -2,7 +2,7 @@
 
 Mirage runs as a sidecar in the Client's Pod and forwards the Client's own `Authorization` header
 to the Upstream API server untouched. It never reads its own ServiceAccount token, never mints
-credentials, and never performs authorization decisions of its own — it rewrites *what* is being
+credentials, and never performs authorization decisions of its own — it confines *what* is being
 asked for, never *who* is asking. The API server therefore remains the sole enforcement point, and
 a broken or compromised Mirage can only cause the Client to receive `403`s, never to gain access
 it did not already have.

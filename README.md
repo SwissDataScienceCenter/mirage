@@ -8,9 +8,9 @@ charts create `ClusterRole`s, and their code lists and watches resources across 
 no option to narrow the scope. If you only have permissions in a single namespace — a shared,
 multi-tenant cluster, say — those operators simply will not start.
 
-Mirage runs as a sidecar next to such a controller and rewrites its API requests. A cluster-wide
-`LIST` of Builds becomes a `LIST` of Builds in one namespace. The controller cannot tell the
-difference, and nothing about the cluster has to change.
+Mirage runs as a sidecar next to such a controller and confines its API requests to a single
+namespace. A cluster-wide `LIST` of Builds becomes a `LIST` of Builds in one namespace. The
+controller cannot tell the difference, and nothing about the cluster has to change.
 
 > **Status: design only.** The decisions are recorded in [`docs/adr/`](./docs/adr/) and the domain
 > language in [`CONTEXT.md`](./CONTEXT.md). No implementation exists yet.
@@ -22,9 +22,14 @@ real API server. Mirage inspects each request and does one of three things:
 
 | Decision | Behaviour |
 | --- | --- |
-| **Rewrite** | The path is a collection path for a configured resource and names no namespace, so Mirage inserts the Target Namespace and forwards it. |
-| **Mask** | The resource is configured as masked. Mirage answers itself, always reporting it as existing and empty, and never contacts the API server. |
+| **Confine** | The path is a collection path for a resource listed under `confined` and names no namespace, so Mirage inserts the Target Namespace and forwards it. The Client's "every namespace" becomes "this namespace". |
+| **Mask** | The resource is listed under `masked`. Mirage answers itself, always reporting it as existing and empty, and never contacts the API server. |
 | **Pass Through** | Everything else is forwarded byte-for-byte, unchanged. |
+
+Confining is a URL-only edit, and only ever an insertion. A request that already names a namespace
+is left exactly as it arrived — even one naming somebody else's namespace — so the API server stays
+the only thing deciding whether it is allowed. Requests for a single object or a subresource are
+left alone too: they cannot be namespace-less in the first place.
 
 Two properties are worth knowing before you rely on it:
 
@@ -33,23 +38,30 @@ holds no credentials of its own. The API server remains the sole enforcement poi
 broken Mirage can do is cause the Client to receive `403`s — it can never grant access the
 Client's ServiceAccount did not already have.
 
-**Mirage only rewrites what you list.** Anything not named in the config is passed through
+**Mirage only confines what you list.** Anything not named in the config is passed through
 unchanged. A forgotten entry therefore fails exactly as it would have without Mirage — a `403` from
 the API server — rather than silently exposing another tenant's namespace.
 
 ## Configuration
 
 ```yaml
-handled:
+# A cluster-wide request for one of these has the Target Namespace inserted into its path.
+confined:
   - {group: "",            resource: pods}          # "" is the core group
   - {group: tekton.dev,    resource: taskruns}
   - {group: shipwright.io, resource: builds}
   - {group: shipwright.io, resource: buildruns}
   - {group: shipwright.io, resource: buildstrategies}
 
+# Mirage answers these itself, always as existing but empty. Never forwarded.
 masked:
   - {group: shipwright.io, resource: clusterbuildstrategies, kind: ClusterBuildStrategy}
 ```
+
+A resource may appear under one key or the other, never both — Mirage refuses to start otherwise,
+rather than let its behaviour depend on an ordering you cannot see. Listing a cluster-scoped
+resource under `confined` is refused for the same reason: there is no namespaced path to confine it
+into, so `namespaces` in particular is rejected with a message pointing at `masked` instead.
 
 `resource` is the plural name as it appears in the URL. API versions are deliberately not part of
 the config — an entry applies to every version of that resource, so a controller reading both
@@ -81,7 +93,7 @@ metadata:
   name: mirage-config
 data:
   config.yaml: |
-    handled:
+    confined:
       - {group: shipwright.io, resource: builds}
       # ... as above
   kubeconfig: |
@@ -169,10 +181,10 @@ the API server, and controller-runtime's leader election finds its namespace by 
 ## Debugging
 
 Mirage logs its full resolved configuration at startup — Target Namespace, Upstream, and every
-handled and masked entry — so the first ten lines of its logs tell you what it actually loaded.
+confined and masked entry — so the first ten lines of its logs tell you what it actually loaded.
 
 Run with debug logging for one structured line per request showing the decision, the inbound path
 and the outbound path.
 
 If the Client is getting unexplained `403`s, look for Mirage's warnings about cluster-wide requests
-that were passed through: that is the signature of a resource missing from `handled`.
+that were passed through: that is the signature of a resource missing from `confined`.

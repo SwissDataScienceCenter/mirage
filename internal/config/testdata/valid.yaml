@@ -1,4 +1,4 @@
-handled:
+confined:
   - {group: "", resource: pods}
   - {group: shipwright.io, resource: builds}
 

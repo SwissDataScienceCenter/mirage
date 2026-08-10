@@ -29,10 +29,25 @@ The single namespace Mirage presents to the Client as though it were the whole c
 namespace of the Pod Mirage runs in.
 _Avoid_: Scoped namespace, tenant namespace, watched namespace
 
-**Handled Resource**:
-A resource kind that Mirage's configuration names as one to rewrite. Only Handled Resources are
-rewritten; anything else is Passed Through.
-_Avoid_: Watched resource, managed resource, intercepted resource
+**Confine**:
+To insert the Target Namespace into a request path that names no namespace, so a request for a
+resource across every namespace becomes a request for it in the Target Namespace alone. Mirage's
+only transformation, and a URL-only one — the payload is never touched, per ADR 0003. A path that
+already names a namespace is never confined, not even to correct a foreign one: leaving it alone
+keeps the API server the sole judge of whether it is allowed.
+_Avoid_: Handle, scope, redirect. "Rewrite" describes the mechanism — the path is rewritten — but
+is too vague to name the decision.
+
+**Confined Resource**:
+A resource kind that Mirage's configuration names as one to Confine. A cluster-wide `LIST` or
+`WATCH` of a Confined Resource is confined to the Target Namespace; requests that already name a
+namespace, name a single object, or address a subresource are Passed Through untouched. Only
+Confined Resources are confined; anything else is Passed Through.
+
+Configuration names them under `confined:`. A cluster-scoped resource cannot be confined — there is
+no namespaced path to confine it into — so Mirage refuses to start with `namespaces` listed there;
+such a resource is a candidate for Masking instead.
+_Avoid_: Handled resource, watched resource, managed resource, intercepted resource
 
 **Masked Resource**:
 A resource kind that Mirage answers itself rather than forwarding, always reporting it as existing
@@ -40,6 +55,6 @@ but empty. Typically a cluster-scoped custom resource the Client reads but does 
 _Avoid_: Faked resource, stubbed resource, blocked resource
 
 **Pass Through**:
-To forward a request to Upstream unchanged. The default for any request Mirage is not configured
-to rewrite.
+To forward a request to Upstream unchanged. The default for any request Mirage is not configured to
+Confine or Mask.
 _Avoid_: Ignore, bypass, proxy verbatim

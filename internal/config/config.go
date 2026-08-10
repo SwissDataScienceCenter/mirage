@@ -1,8 +1,8 @@
 // Package config loads and validates Mirage's configuration file.
 //
-// The file names the Handled Resources — those Mirage rewrites — and the Masked
-// Resources — those Mirage answers itself. Anything not named is Passed Through.
-// See CONTEXT.md for the vocabulary.
+// The file names the Confined Resources — those Mirage confines to the Target
+// Namespace — and the Masked Resources — those Mirage answers itself. Anything not
+// named is Passed Through. See CONTEXT.md for the vocabulary.
 package config
 
 import (
@@ -41,8 +41,11 @@ type Masked struct {
 
 // Config is Mirage's on-disk configuration.
 type Config struct {
-	Handled []Resource `yaml:"handled"`
-	Masked  []Masked   `yaml:"masked"`
+	// Confined names the resources whose cluster-wide requests are confined to the
+	// Target Namespace.
+	Confined []Resource `yaml:"confined"`
+	// Masked names the resources Mirage answers itself, as existing but empty.
+	Masked []Masked `yaml:"masked"`
 }
 
 // Load reads and validates the configuration file at path.
@@ -66,29 +69,29 @@ func Load(path string) (Config, error) {
 
 // Validate reports whether the configuration is usable.
 //
-// A resource may not be both handled and masked: the two decisions are mutually
+// A resource may not be both confined and masked: the two decisions are mutually
 // exclusive, and silently preferring one would make Mirage's behaviour depend on
 // an ordering the Deployer cannot see.
 func (c Config) Validate() error {
-	seen := make(map[Resource]string, len(c.Handled)+len(c.Masked))
+	seen := make(map[Resource]string, len(c.Confined)+len(c.Masked))
 
-	for _, r := range c.Handled {
+	for _, r := range c.Confined {
 		if r.Resource == "" {
-			return fmt.Errorf("handled entry with group %q has no resource", r.Group)
+			return fmt.Errorf("confined entry with group %q has no resource", r.Group)
 		}
-		// Handling means inserting the Target Namespace into the path, which is
+		// Confining means inserting the Target Namespace into the path, which is
 		// meaningless for a cluster-scoped resource. Namespaces is the one case
 		// Mirage can recognise on its own, and the one a Deployer is most likely to
 		// reach for, so it is refused with a reason rather than accepted and
 		// rewritten into a path the API server does not serve. Masking it is a
 		// coherent choice and remains allowed.
 		if r.Group == "" && r.Resource == "namespaces" {
-			return fmt.Errorf("namespaces cannot be handled: it is cluster-scoped, so there is no namespaced path to rewrite it into; mask it instead if the Client should see none")
+			return fmt.Errorf("namespaces cannot be confined: it is cluster-scoped, so there is no namespaced path to rewrite it into; mask it instead if the Client should see none")
 		}
 		if where, dup := seen[r]; dup {
-			return fmt.Errorf("resource %s appears in both handled and %s", r, where)
+			return fmt.Errorf("resource %s appears in both confined and %s", r, where)
 		}
-		seen[r] = "handled"
+		seen[r] = "confined"
 	}
 
 	for _, m := range c.Masked {
@@ -111,16 +114,16 @@ func (c Config) Validate() error {
 // echoes back everything it loaded so the first lines of its logs say what it
 // actually believes, rather than what the Deployer intended.
 func (c Config) LogValue() slog.Value {
-	handled := make([]string, 0, len(c.Handled))
-	for _, r := range c.Handled {
-		handled = append(handled, r.String())
+	confined := make([]string, 0, len(c.Confined))
+	for _, r := range c.Confined {
+		confined = append(confined, r.String())
 	}
 	masked := make([]string, 0, len(c.Masked))
 	for _, m := range c.Masked {
 		masked = append(masked, m.String()+" as "+m.Kind)
 	}
 	return slog.GroupValue(
-		slog.Any("handled", handled),
+		slog.Any("confined", confined),
 		slog.Any("masked", masked),
 	)
 }

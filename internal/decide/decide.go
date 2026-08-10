@@ -1,8 +1,8 @@
 // Package decide turns an inbound request into one of three decisions: Pass
-// Through, Rewrite, or Mask.
+// Through, Confine, or Mask.
 //
 // Deciding is a pure function of the method, the path and the configuration. It
-// never touches the payload — see ADR 0003 — so the only transformation Rewrite
+// never touches the payload — see ADR 0003 — so the only transformation Confine
 // performs is inserting the Target Namespace into the URL.
 package decide
 
@@ -19,8 +19,9 @@ type Action string
 const (
 	// PassThrough forwards the request to Upstream unchanged. The default.
 	PassThrough Action = "pass-through"
-	// Rewrite inserts the Target Namespace into the path and forwards it.
-	Rewrite Action = "rewrite"
+	// Confine inserts the Target Namespace into a path that names no namespace,
+	// turning a cluster-wide request into a namespaced one, and forwards it.
+	Confine Action = "confine"
 	// Mask answers the request locally without contacting Upstream.
 	Mask Action = "mask"
 )
@@ -44,7 +45,7 @@ type Target struct {
 	// resource; nothing in the path distinguishes the two.
 	Namespaced bool
 	// Watch reports whether the path carried the legacy /watch/ prefix, which is
-	// how a Client asked for a watch before ?watch=true replaced it. A Rewrite has
+	// how a Client asked for a watch before ?watch=true replaced it. Confining has
 	// to put it back, and a Mask has to answer with a stream rather than a list.
 	Watch bool
 	// OK reports whether the path parsed as a resource path at all. Discovery,
@@ -66,8 +67,9 @@ func (t Target) Collection() bool { return t.Name == "" }
 //
 // Namespace is cluster-scoped: /api/v1/namespaces/{name} is one Namespace object,
 // and there is no /api/v1/namespaces/{namespace}/namespaces for a cluster-wide
-// request to be rewritten into. Parse already relies on this to read a namespaces
-// segment as a selector; Decide relies on it to refuse a rewrite that cannot exist.
+// request to be confined into. Parse already relies on this to read a namespaces
+// segment as a selector; Decide relies on it to refuse a confinement that cannot
+// exist.
 //
 // The group check matters: a CRD named "namespaces" in some other group is an
 // ordinary resource and may well be namespaced.
@@ -178,14 +180,14 @@ func parts(rest []string) (resource, name, subresource string) {
 type Decision struct {
 	Action Action
 	// Path is what to send Upstream. Equal to the inbound path unless the Action
-	// is Rewrite; meaningless when it is Mask.
+	// is Confine; meaningless when it is Mask.
 	Path   string
 	Target Target
 	// Masked carries the configuration entry when the Action is Mask.
 	Masked config.Masked
 	// Warn marks a cluster-wide collection request for a resource that is not
 	// configured. Such a request is Passed Through and will very likely come back
-	// 403 — which is the signature of a missing handled entry.
+	// 403 — which is the signature of a missing confined entry.
 	Warn bool
 }
 
@@ -193,7 +195,7 @@ type Decision struct {
 // It is immutable once built and safe for concurrent use.
 type Decider struct {
 	namespace string
-	handled   map[config.Resource]struct{}
+	confined  map[config.Resource]struct{}
 	masked    map[config.Resource]config.Masked
 }
 
@@ -202,11 +204,11 @@ type Decider struct {
 func New(cfg config.Config, namespace string) *Decider {
 	d := &Decider{
 		namespace: namespace,
-		handled:   make(map[config.Resource]struct{}, len(cfg.Handled)),
+		confined:  make(map[config.Resource]struct{}, len(cfg.Confined)),
 		masked:    make(map[config.Resource]config.Masked, len(cfg.Masked)),
 	}
-	for _, r := range cfg.Handled {
-		d.handled[r] = struct{}{}
+	for _, r := range cfg.Confined {
+		d.confined[r] = struct{}{}
 	}
 	for _, m := range cfg.Masked {
 		d.masked[m.Resource] = m
@@ -227,27 +229,27 @@ func (d *Decider) Decide(method, path string) Decision {
 		return dec
 	}
 
-	if _, ok := d.handled[t.Ref()]; ok {
+	if _, ok := d.confined[t.Ref()]; ok {
 		// Insert the Target Namespace only when the path names no namespace and
 		// addresses a collection. An explicit namespace — even a foreign one — is
 		// left alone, so the API server stays the one deciding whether it is
 		// allowed. Single-object and subresource paths cannot be namespace-less
 		// for a namespaced resource, so they are left alone too.
 		//
-		// Namespaces is excluded because no such path exists to rewrite into.
+		// Namespaces is excluded because no such path exists to confine it into.
 		// config.Validate rejects it before startup, so this only guards a Decider
 		// built from an unvalidated Config.
 		if !t.Namespaced && t.Collection() && !t.Namespaces() {
-			dec.Action = Rewrite
-			dec.Path = namespacedPath(t, d.namespace)
+			dec.Action = Confine
+			dec.Path = confinedPath(t, d.namespace)
 		}
 		return dec
 	}
 
 	// Unconfigured. Pass it through, but say so if it looks like the request a
-	// missing handled entry would produce.
+	// missing confined entry would produce.
 	//
-	// Never for Namespaces: it is cluster-scoped, so `handled` is not the fix and
+	// Never for Namespaces: it is cluster-scoped, so `confined` is not the fix and
 	// suggesting it would send the Deployer towards a configuration Mirage refuses
 	// to start with. A Client that lists namespaces wants `masked` or nothing.
 	dec.Warn = method == http.MethodGet && !t.Namespaced && t.Collection() && !t.Namespaces()
@@ -257,7 +259,8 @@ func (d *Decider) Decide(method, path string) Decision {
 // Namespace returns the Target Namespace.
 func (d *Decider) Namespace() string { return d.namespace }
 
-func namespacedPath(t Target, namespace string) string {
+// confinedPath rebuilds a namespace-less path with the Target Namespace inserted.
+func confinedPath(t Target, namespace string) string {
 	var b strings.Builder
 	if t.Group == "" {
 		b.WriteString("/api/")

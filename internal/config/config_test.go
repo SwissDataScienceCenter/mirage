@@ -10,11 +10,11 @@ import (
 )
 
 var _ = Describe("Load", func() {
-	It("reads handled and masked entries", func() {
+	It("reads confined and masked entries", func() {
 		c, err := config.Load(filepath.Join("testdata", "valid.yaml"))
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(c.Handled).To(Equal([]config.Resource{
+		Expect(c.Confined).To(Equal([]config.Resource{
 			{Group: "", Resource: "pods"},
 			{Group: "shipwright.io", Resource: "builds"},
 		}))
@@ -46,14 +46,14 @@ var _ = Describe("Validate", func() {
 	})
 
 	It("accepts the same resource name in two groups", func() {
-		Expect(config.Config{Handled: []config.Resource{
+		Expect(config.Config{Confined: []config.Resource{
 			{Group: "shipwright.io", Resource: "builds"},
 			{Group: "tekton.dev", Resource: "builds"},
 		}}.Validate()).To(Succeed())
 	})
 
-	It("rejects a handled entry without a resource", func() {
-		Expect(config.Config{Handled: []config.Resource{
+	It("rejects a confined entry without a resource", func() {
+		Expect(config.Config{Confined: []config.Resource{
 			{Group: "shipwright.io"},
 		}}.Validate()).NotTo(Succeed())
 	})
@@ -65,17 +65,17 @@ var _ = Describe("Validate", func() {
 		}}.Validate()).NotTo(Succeed())
 	})
 
-	It("rejects the same resource handled twice", func() {
-		Expect(config.Config{Handled: []config.Resource{
+	It("rejects the same resource confined twice", func() {
+		Expect(config.Config{Confined: []config.Resource{
 			{Group: "shipwright.io", Resource: "builds"},
 			{Group: "shipwright.io", Resource: "builds"},
 		}}.Validate()).NotTo(Succeed())
 	})
 
-	It("rejects handled namespaces, which are cluster-scoped", func() {
-		// Handling means inserting the Target Namespace into the path, and there is
+	It("rejects confined namespaces, which are cluster-scoped", func() {
+		// Confining means inserting the Target Namespace into the path, and there is
 		// no /api/v1/namespaces/{ns}/namespaces to insert it into.
-		Expect(config.Config{Handled: []config.Resource{
+		Expect(config.Config{Confined: []config.Resource{
 			{Resource: "namespaces"},
 		}}.Validate()).NotTo(Succeed())
 	})
@@ -87,19 +87,19 @@ var _ = Describe("Validate", func() {
 		}}.Validate()).To(Succeed())
 	})
 
-	It("accepts a handled namespaces resource in another group", func() {
+	It("accepts a confined namespaces resource in another group", func() {
 		// A CRD that happens to be called "namespaces" is an ordinary resource and
 		// may well be namespaced. Only the core one is cluster-scoped.
-		Expect(config.Config{Handled: []config.Resource{
+		Expect(config.Config{Confined: []config.Resource{
 			{Group: "example.com", Resource: "namespaces"},
 		}}.Validate()).To(Succeed())
 	})
 
-	It("rejects a resource that is both handled and masked", func() {
+	It("rejects a resource that is both confined and masked", func() {
 		// The two decisions are mutually exclusive; preferring one silently would
 		// make Mirage's behaviour depend on an ordering the Deployer cannot see.
 		Expect(config.Config{
-			Handled: []config.Resource{{Group: "shipwright.io", Resource: "builds"}},
+			Confined: []config.Resource{{Group: "shipwright.io", Resource: "builds"}},
 			Masked: []config.Masked{
 				{Resource: config.Resource{Group: "shipwright.io", Resource: "builds"}, Kind: "Build"},
 			},

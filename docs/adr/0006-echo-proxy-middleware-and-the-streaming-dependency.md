@@ -3,7 +3,8 @@
 Mirage serves with Echo v5 and proxies with Echo's `middleware.Proxy` (single-target
 `RoundRobinBalancer`), rather than constructing `httputil.ReverseProxy` itself. `/healthz` is an
 ordinary Echo route; everything else goes to a catch-all `/*` carrying two route-level middlewares —
-a `decide` middleware that rewrites the path, short-circuits Masked Resources, or passes through,
+a `decide` middleware that confines the path to the Target Namespace, short-circuits Masked
+Resources, or passes through,
 followed by the proxy middleware. Echo's `Rewrite`/`RegexRewrite` options are left empty: they are
 static patterns and cannot express Mirage's rule.
 
