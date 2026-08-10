@@ -92,15 +92,16 @@ func Deciding(d *decide.Decider, m *mask.Handler, log *slog.Logger) echo.Middlew
 				slog.String("outbound", dec.Path),
 			)
 
-			if dec.Action == decide.Mask {
+			switch dec.Action {
+			case decide.Mask:
 				return m.Handle(c, dec)
-			}
-
-			if dec.Action == decide.Rewrite {
+			case decide.Rewrite:
 				req.URL.Path = dec.Path
 				// Clear RawPath so EscapedPath() re-derives the encoding from the
 				// new Path rather than serving the stale original.
 				req.URL.RawPath = ""
+			default:
+				// Do nothing - i.e. pass through.
 			}
 
 			// The inbound Host is Mirage's own loopback address, which means
