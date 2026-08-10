@@ -1,0 +1,6 @@
+handled:
+  - {group: "", resource: pods}
+  - {group: shipwright.io, resource: builds}
+
+masked:
+  - {group: shipwright.io, resource: clusterbuildstrategies, kind: ClusterBuildStrategy}

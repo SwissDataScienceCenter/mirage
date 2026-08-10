@@ -1,0 +1,40 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - ginkgolinter
+    - goconst
+    - gocritic
+    - misspell
+    - nilerr
+    - revive
+    - unconvert
+    - usestdlibvars
+    - whitespace
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+
+  exclusions:
+    rules:
+      # Ginkgo suites are built from top-level Describe blocks assigned to _.
+      - path: _test\.go$
+        linters:
+          - dupl
+          - goconst
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/SwissDataScienceCenter/mirage

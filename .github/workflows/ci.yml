@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: extractions/setup-just@v3
+
+      - name: Verify go.mod is tidy
+        run: |
+          just tidy
+          git diff --exit-code go.mod go.sum
+
+      - run: just test
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: extractions/setup-just@v3
+
+      - run: just vet
+
+      # Deliberately not `just golangci-lint`: the action brings its own cached
+      # binary and annotates the pull request inline. It runs `golangci-lint run`,
+      # which is exactly what the recipe runs locally.
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: extractions/setup-just@v3
+
+      - run: just tag=${{ github.sha }} image
