@@ -8,6 +8,13 @@ ginkgo := "go tool ginkgo"
 # rather than a default to inherit. See ADR 0007.
 k8s_version := "1.34.1"
 
+# Where the control-plane binaries land. Empty means setup-envtest's own store,
+# whose path has moved between releases; CI sets ENVTEST_DIR to somewhere it can
+# cache by name. Both `envtest` and `test-integration` read it, so the download
+# and the suite always agree on the directory.
+envtest_dir := env("ENVTEST_DIR", "")
+envtest_flags := if envtest_dir == "" { "" } else { "--bin-dir " + envtest_dir }
+
 # Show the available recipes.
 default:
     @just --list
@@ -34,7 +41,7 @@ test-go pkg="./...":
 
 # Download the envtest control-plane binaries and print where they landed.
 envtest:
-    @go tool setup-envtest use {{ k8s_version }} -p path
+    @go tool setup-envtest use {{ k8s_version }} -p path {{ envtest_flags }}
 
 # Run the integration suite against a real etcd and kube-apiserver.
 #

@@ -4,11 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
 jobs:
+  # The unit tier: tidiness, both linters, and the fast suites. One job because
+  # they share a Go toolchain and cache and all answer the same question — is the
+  # source in shape — so there is nothing to gain from a second runner.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -26,10 +31,27 @@ jobs:
           just tidy
           git diff --exit-code go.mod go.sum
 
+      - run: just vet
+
+      # Deliberately not `just golangci-lint`: the action brings its own cached
+      # binary and annotates the pull request inline. It runs `golangci-lint run`,
+      # which is exactly what the recipe runs locally.
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+
       - run: just test
 
-  lint:
+  # A separate job from `test`: the integration suite is behind the `integration`
+  # build tag, needs the envtest control-plane binaries downloaded, and shares one
+  # control plane across its specs. Running it here keeps the unit tier fast and
+  # lets the two tiers report failures independently.
+  integration-test:
     runs-on: ubuntu-latest
+    env:
+      # Pins the asset store so it can be cached by name: setup-envtest's own
+      # default has moved between releases. Read by both justfile recipes.
+      ENVTEST_DIR: ${{ github.workspace }}/.envtest
     steps:
       - uses: actions/checkout@v4
 
@@ -40,20 +62,112 @@ jobs:
 
       - uses: extractions/setup-just@v3
 
-      - run: just vet
+      # The Kubernetes version is pinned in the justfile, so it is the cache key
+      # rather than something restated here.
+      - name: Read the pinned Kubernetes version
+        id: k8s
+        run: echo "version=$(just --evaluate k8s_version)" >>"$GITHUB_OUTPUT"
 
-      # Deliberately not `just golangci-lint`: the action brings its own cached
-      # binary and annotates the pull request inline. It runs `golangci-lint run`,
-      # which is exactly what the recipe runs locally.
-      - uses: golangci/golangci-lint-action@v7
+      - uses: actions/cache@v4
         with:
-          version: latest
+          path: ${{ env.ENVTEST_DIR }}
+          key: envtest-${{ runner.os }}-${{ steps.k8s.outputs.version }}
 
-  image:
+      # A no-op on a cache hit. Kept as its own step so a failure to fetch the
+      # control plane is not mistaken for a suite failure.
+      - name: Download the envtest control plane
+        run: just envtest
+
+      - run: just test-integration
+
+  # Proves the Dockerfile still builds, without pushing anything. No `needs`, so
+  # it runs alongside the two test jobs rather than after them: a Dockerfile break
+  # and a test failure are independent findings and both are worth having at once.
+  #
+  # amd64 only — the runner's own architecture, so no emulation. arm64 is left to
+  # the release build, where the wait is worth paying and QEMU is already in play.
+  build-image:
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: extractions/setup-just@v3
+      - uses: docker/setup-buildx-action@v3
 
-      - run: just tag=${{ github.sha }} image
+      # The same gha cache the release build reads, so a release mostly reuses
+      # layers already built for the commit that became the tag.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Only ever runs to publish. The job-level condition keeps a runner from
+  # starting for a pull request, a main-branch push, or a pre-release; the tag
+  # shape cannot be matched there because GitHub expressions have no regex, so it
+  # is a step — one that fails, because a release tagged outside x.y.z is a
+  # mistake to surface rather than a reason to quietly build nothing.
+  publish-image:
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require an x.y.z release tag
+        env:
+          tag_name: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$tag_name" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag '$tag_name' is not x.y.z; not publishing an image."
+            exit 1
+          fi
+
+      # arm64 is built under emulation. The Dockerfile takes TARGETARCH, so the
+      # cost is QEMU's, not a second build definition's.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ghcr.io requires a lowercase path, which `github.repository` is not.
+      # `latest=auto` tags the release as latest for a non-pre-release semver tag,
+      # which the condition and the step above have already narrowed to x.y.z.
+      - uses: docker/metadata-action@v5
+        id: meta
+        env:
+          # The action's default is `manifest`, which annotates only the
+          # per-architecture manifests. ghcr.io reads the index to link the
+          # package to this repository, so the index needs image.source too.
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
+        with:
+          images: ghcr.io/swissdatasciencecenter/mirage
+          flavor: |
+            latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Labels land on the per-architecture images; a multi-platform push
+          # publishes an index on top of those, and it is the index ghcr.io looks
+          # at when linking the package to the repository. Annotations are how the
+          # index gets image.source, so the Dockerfile's LABEL alone is not enough
+          # here. See the labels in the Dockerfile's final stage.
+          annotations: ${{ steps.meta.outputs.annotations }}
+          provenance: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
