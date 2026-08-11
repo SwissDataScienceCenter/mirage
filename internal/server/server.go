@@ -1,5 +1,6 @@
-// Package server wires Mirage's HTTP surface: a /healthz route, and a catch-all
-// carrying the decide middleware followed by Echo's proxy middleware.
+// Package server wires Mirage's HTTP surface: logging and panic recovery over
+// everything, a /healthz route, and a catch-all carrying the decide middleware
+// followed by Echo's proxy middleware.
 //
 // See ADR 0006 for why the proxy middleware is used as-is rather than building a
 // httputil.ReverseProxy by hand, and for the streaming behaviour that makes WATCH
@@ -37,6 +38,15 @@ func New(o Options) (*echo.Echo, error) {
 	e := echo.New()
 	e.Logger = o.Logger
 
+	// Global rather than route-level, so both also cover the responses Echo
+	// generates before routing — a 404 above all. Route-level middleware, which is
+	// what the deciding middleware below is, never runs for those.
+	//
+	// Logging wraps Recover so that a recovered panic reaches it as a value to log:
+	// Echo's Recover does not log anything itself, it converts the panic into a
+	// PanicStackError and returns it up the chain.
+	e.Use(Logging(o.Logger), middleware.Recover())
+
 	e.GET("/healthz", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -51,6 +61,27 @@ func New(o Options) (*echo.Echo, error) {
 		// patterns and cannot express Mirage's rule, which depends on the
 		// configuration and on whether the path already names a namespace. The
 		// deciding middleware edits the path instead.
+
+		// Without this, a failure on the leg between Mirage and Upstream is
+		// invisible from both ends. Echo's proxy middleware installs its own
+		// ErrorHandler on the underlying httputil.ReverseProxy, which suppresses
+		// the stdlib's "http: proxy error" line, and then answers 502 with a JSON
+		// body that is not a metav1.Status — and client-go renders any non-Status,
+		// non-text error body as the single word "unknown". So the Client reports
+		// nothing usable and Mirage reports nothing at all.
+		ErrorHandler: func(c *echo.Context, err error) error {
+			o.Logger.Error("could not forward to upstream",
+				slog.String("method", c.Request().Method),
+				// Post-confinement, so this is the path Mirage actually asked
+				// Upstream for — the same value the decided line calls outbound.
+				slog.String("outbound", c.Request().URL.Path),
+				slog.String("upstream", o.Upstream.String()),
+				slog.Any("error", err),
+			)
+			// Returned unchanged: the Client sees exactly the response it saw
+			// before. This handler only makes the failure observable.
+			return err
+		},
 	}.ToMiddleware()
 	if err != nil {
 		return nil, err
@@ -63,6 +94,55 @@ func New(o Options) (*echo.Echo, error) {
 	e.Any("/*", unreachable, deciding, proxy)
 
 	return e, nil
+}
+
+// Logging emits one line per request once the response is complete.
+//
+// It overlaps with the decided line the deciding middleware writes, deliberately:
+// that one says what Mirage set out to do with a request, this one says what came
+// of it. The status is the part neither the decided line nor the Client can
+// supply, and its absence is what makes a proxy failure hard to place — the
+// Client is told only "unknown".
+//
+// A WATCH is logged when it ends rather than when it starts, since that is when
+// the status and latency exist. A long-lived watch therefore shows up minutes
+// after the decided line that opened it, or not at all until shutdown.
+func Logging(log *slog.Logger) echo.MiddlewareFunc {
+	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		LogMethod:  true,
+		LogURIPath: true,
+		LogStatus:  true,
+		LogLatency: true,
+		// Let Echo's error handler run before the values are read, so Status is
+		// the status the Client received rather than the zero value a handler
+		// that returned an error would otherwise leave behind.
+		HandleError: true,
+		LogValuesFunc: func(_ *echo.Context, v middleware.RequestLoggerValues) error {
+			attrs := []any{
+				slog.String("method", v.Method),
+				slog.String("path", v.URIPath),
+				slog.Int("status", v.Status),
+				slog.Duration("latency", v.Latency),
+			}
+			if v.Error != nil {
+				// Carries the recovered panic and its stack when Recover handled
+				// one, which is the only place either is recorded.
+				attrs = append(attrs, slog.Any("error", v.Error))
+			}
+
+			// A 5xx is Mirage's own failure — it forwards Upstream's own statuses
+			// untouched, so anything in that range was generated here. Loud by
+			// default, at the level Mirage runs at in production. Everything else,
+			// including the 4xxs that are Upstream enforcing RBAC exactly as ADR
+			// 0001 intends, is ordinary traffic.
+			if v.Status >= http.StatusInternalServerError || v.Error != nil {
+				log.Error("request failed", attrs...)
+				return nil //nolint:nilerr
+			}
+			log.Debug("request", attrs...)
+			return nil
+		},
+	})
 }
 
 // Deciding classifies each request and acts on it: it answers Masked Resources
