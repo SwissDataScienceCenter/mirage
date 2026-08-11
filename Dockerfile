@@ -27,6 +27,7 @@ LABEL org.opencontainers.image.source="https://github.com/SwissDataScienceCenter
 LABEL org.opencontainers.image.url="https://github.com/SwissDataScienceCenter/mirage"
 LABEL org.opencontainers.image.title="mirage"
 LABEL org.opencontainers.image.description="Makes a Kubernetes controller believe it has cluster-wide access when it only has access to one namespace."
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=build /out/mirage /mirage
 

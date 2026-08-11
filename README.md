@@ -230,3 +230,9 @@ layers, loudest last:
 
 `MIRAGE_TEST_LOG_LEVEL` (`debug` by default, as above) turns Mirage's own logging down when its
 volume is what is in the way.
+
+## License
+
+Apache License 2.0 — see [LICENSE](./LICENSE).
+
+Copyright 2026 Swiss Data Science Center, EPFL and ETH Zurich.
