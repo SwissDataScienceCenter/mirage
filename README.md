@@ -12,8 +12,8 @@ Mirage runs as a sidecar next to such a controller and confines its API requests
 namespace. A cluster-wide `LIST` of Builds becomes a `LIST` of Builds in one namespace. The
 controller cannot tell the difference, and nothing about the cluster has to change.
 
-> **Status: design only.** The decisions are recorded in [`docs/adr/`](./docs/adr/) and the domain
-> language in [`CONTEXT.md`](./CONTEXT.md). No implementation exists yet.
+> Technical decisions are recorded in [`docs/adr/`](./docs/adr/) and the domain
+> language in [`CONTEXT.md`](./CONTEXT.md).
 
 ## How it works
 
