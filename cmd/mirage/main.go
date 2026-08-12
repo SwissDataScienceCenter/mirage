@@ -1,12 +1,14 @@
 // Command mirage runs the proxy.
 //
-// It is a sidecar in the Client's Pod. It listens on loopback in plaintext (ADR
-// 0002), presents its own namespace as the whole cluster (ADR 0003), and forwards
-// the Client's credentials without ever holding any of its own (ADR 0001).
+// It is a sidecar in the Client's Pod. It listens on loopback over HTTPS with a
+// self-signed certificate (ADR 0002), presents its own namespace as the whole
+// cluster (ADR 0003), and forwards the Client's credentials without ever holding
+// any of its own (ADR 0001).
 package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -19,6 +21,7 @@ import (
 	"github.com/labstack/echo/v5"
 
 	"github.com/SwissDataScienceCenter/mirage/internal/config"
+	"github.com/SwissDataScienceCenter/mirage/internal/selfsign"
 	"github.com/SwissDataScienceCenter/mirage/internal/server"
 	"github.com/SwissDataScienceCenter/mirage/internal/serviceaccount"
 	"github.com/SwissDataScienceCenter/mirage/internal/upstream"
@@ -41,7 +44,7 @@ func main() {
 func run() error {
 	var (
 		configPath = flag.String("config", "/etc/mirage/config.yaml", "path to Mirage's configuration file")
-		listen     = flag.String("listen", "127.0.0.1:8001", "address to listen on; loopback only, see ADR 0002")
+		listen     = flag.String("listen", "127.0.0.1:8001", "address to listen on; loopback only, HTTPS, see ADR 0002")
 		logLevel   = flag.String("log-level", "info", "one of debug, info, warn, error")
 	)
 	flag.Parse()
@@ -72,10 +75,22 @@ func run() error {
 		return err
 	}
 
+	// Generated per start and held only in memory. It authenticates nothing — the
+	// Client is configured to skip verification — but without it the listener is
+	// plaintext, and clientcmd drops the Client's credentials rather than send
+	// them to an http:// server. See ADR 0002.
+	certPEM, keyPEM, err := selfsign.Certificate()
+	if err != nil {
+		return err
+	}
+
 	// Echo the whole resolved configuration back, so the first lines of Mirage's
 	// logs say what it actually loaded rather than what was intended.
 	log.Info("mirage starting",
-		slog.String("listen", *listen),
+		// With the scheme, because it is the half of the address the Client's
+		// kubeconfig gets wrong: an http:// server there costs it its credentials
+		// silently. See ADR 0002.
+		slog.String("listen", "https://"+*listen),
 		slog.String("targetNamespace", namespace),
 		slog.String("upstream", upstreamURL.String()),
 		slog.Any("config", cfg),
@@ -101,6 +116,10 @@ func run() error {
 	start := echo.StartConfig{
 		Address:         *listen,
 		GracefulTimeout: shutdownGrace,
+		// The certificate is supplied to StartTLS below; this is only the floor on
+		// the negotiated version, set here rather than inherited so it cannot drift
+		// with the stdlib default.
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		// Mirage logs its own startup line, with rather more in it.
 		HideBanner: true,
 		HidePort:   true,
@@ -121,7 +140,7 @@ func run() error {
 		},
 	}
 
-	if err := start.Start(ctx, e); err != nil {
+	if err := start.StartTLS(ctx, e, certPEM, keyPEM); err != nil {
 		return err
 	}
 	log.Info("mirage stopped")

@@ -82,8 +82,12 @@ var (
 	// arranging the world — namespaces, RBAC, objects — never for the assertions,
 	// which go through mirageCfg.
 	adminCfg *rest.Config
-	// mirageCfg reaches the API server through Mirage: plaintext loopback, bearer
-	// token, no TLS (ADR 0002).
+	// mirageCfg reaches the API server through Mirage: loopback, bearer token.
+	//
+	// Built programmatically rather than from a kubeconfig, so clientcmd never
+	// runs and the suite is indifferent to the listener's scheme — which is why it
+	// could not have caught the credential bug ADR 0002 now records. See the
+	// leftover item in TODO.md.
 	mirageCfg *rest.Config
 	// directCfg is the same identity talking straight to the API server, so a spec
 	// can show what Mirage changed.

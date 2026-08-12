@@ -23,6 +23,109 @@ now.
 **Resolved: pinned to Kubernetes 1.34.1**, in the `justfile`'s `k8s_version`. See ADR 0007 for why
 the current line rather than the 1.29 floor the README claims.
 
+## The plaintext listener cost the Client its credentials
+
+Found in production against the Shipwright build controller, 2026-08-12. Fixed by
+[ADR 0002](./docs/adr/0002-self-signed-tls-on-loopback.md), which now records the opposite of what
+it originally did. Written up at length because almost every step of the diagnosis was misleading,
+and the next person deserves the map.
+
+**The symptom.** The controller died at startup with one line, and nothing else anywhere:
+
+```
+failed to determine if *v1.Pod is namespaced: failed to get restmapping: failed to get server groups: unknown
+```
+
+**The cause.** `clientcmd` reads a kubeconfig's credentials only when the server URL is `https://`
+— `DirectClientConfig.ClientConfig()` gates the whole block behind
+`restclient.IsConfigTransportTLS`, which is just `baseURL.Scheme == "https"`. Mirage served
+plaintext and the published kubeconfig therefore said `server: http://127.0.0.1:8001`, so `token`,
+`tokenFile` and client certificates were all skipped, silently. The Client's `rest.Config` had no
+bearer token, its requests arrived at the API server as `system:anonymous`, and `GET /api` came back
+`403`.
+
+**Why the error said nothing.** `setDiscoveryDefaults` gives the discovery client an inert
+serializer:
+
+```go
+codec := runtime.NoopEncoder{Decoder: scheme.Codecs.UniversalDecoder()}
+config.NegotiatedSerializer = serializer.NegotiatedSerializerWrapper(runtime.SerializerInfo{Serializer: codec})
+```
+
+That `SerializerInfo` has no `MediaType`, so `SerializerInfoForMediaType` can never match
+`application/json` and `rest.Request.transformResponse` fails to negotiate a decoder for *any*
+discovery response. On a non-2xx it falls through to `transformUnstructuredResponseError`, where
+`message` starts as the literal string `"unknown"` and is replaced by the body only when the
+`Content-Type` is `text/*`. So the API server's entirely clear
+`forbidden: User "system:anonymous" cannot get path "/api"` was decoded, discarded and replaced with
+one word. **Any** discovery failure reads as `unknown`, whatever its cause — the message carries no
+information at all, which is worth knowing before spending an evening on it.
+
+**What made it hard, and what to do differently.** Every manual replay succeeded: `curl` from a
+debug container in the same Pod, with the same token from the same projected volume, got `200`.
+Only requests originating from the Client failed, because only they went through `clientcmd`. Three
+separate wrong theories — TLS to the API server, aggregated-discovery content negotiation, a
+startup-window race — each survived longer than they should have because Mirage recorded only its
+own intent and never the outcome. Fixed by [the observability work below](#observability); the
+`decided` line now carries whether the request even had an `Authorization` header, which is the
+single fact that would have ended it immediately.
+
+### Alternatives considered
+
+- **Self-signed cert, `insecure-skip-tls-verify: true` in the kubeconfig.** Taken. Generated per
+  start, held in memory, never distributed, nothing to rotate. Verification is skipped because it
+  could not be worth anything: the peer is another container in the same network namespace, and
+  anything positioned to intercept the connection already holds the token.
+- **Mirage writes its CA and the whole kubeconfig into a shared `emptyDir`.** Rejected for now, but
+  the better design in one respect: it deletes the hand-maintained kubeconfig from the ConfigMap,
+  where it can drift out of step with the listener — which is precisely how this bug shipped. Costs
+  a static reviewable ConfigMap in exchange for a file generated at runtime. Revisit if the drift
+  recurs.
+- **Inline `token:` in the kubeconfig instead of `tokenFile:`.** Does not work. The gate skips the
+  entire credential block, so an inline token is dropped exactly as the file was.
+- **Have Mirage inject an `Authorization` header of its own.** Rejected outright: it violates
+  [ADR 0001](./docs/adr/0001-mirage-never-adds-authority.md), which is the property the whole design
+  rests on. Mirage would have to hold a credential, and a broken Mirage could then grant access the
+  Client's ServiceAccount does not have.
+- **Leave plaintext, document that Clients must set `insecure-skip-tls-verify` against an `http://`
+  server.** Not possible — the scheme is the gate, and no kubeconfig setting opens it.
+
+### Left over
+
+- [ ] **Nothing tests the credential path end to end.** `test/integration/suite_test.go` serves
+      Mirage with `httptest.NewServer` and builds `mirageCfg` programmatically, so `clientcmd` never
+      runs and the scheme never mattered. `internal/server/kubeconfig_test.go` now pins the
+      `clientcmd` behaviour directly, but a spec that loads the README's kubeconfig against a TLS
+      Mirage and drives a real informer through it would be the one that cannot pass vacuously.
+      Related to the `echo.StartConfig` gap already noted below — both are the same hole, that the
+      suite tests `server.New` rather than the program.
+
+- [ ] **The README's `startupProbe` cannot pass as written.** `httpGet` is sent by the kubelet to
+      the Pod IP, and Mirage binds `127.0.0.1` only, so `<podIP>:8001` is refused and the native
+      sidecar never reports started. It needs `host: 127.0.0.1` alongside `scheme: HTTPS`. Found
+      while reading the manifest during this diagnosis; not the cause of it, and untested, since the
+      cluster it was found on evidently runs a manifest that differs here.
+
+<a id="observability"></a>
+## Observability
+
+Added while diagnosing the credential bug above, and kept because its absence is what made that
+diagnosis take as long as it did.
+
+- [x] **`ErrorHandler` on the proxy middleware.** Echo installs its own handler on the underlying
+      `httputil.ReverseProxy`, which suppresses the stdlib's `http: proxy error` line, and then
+      answers `502` with a JSON body that is not a `metav1.Status` — which client-go also renders as
+      `unknown`. A failure to reach Upstream was invisible from both ends.
+- [x] **`Logging` and `Recover` as global middleware.** `Logging` carries the response status, which
+      neither the `decided` line nor the Client can supply. Global rather than route-level so that
+      responses Echo generates before routing — a `404`, a method mismatch — are logged at all;
+      route-level middleware never runs for those. `Recover` must sit *inside* `Logging`, since Echo
+      v5's `Recover` does not log: it converts the panic into a `PanicStackError` and returns it, so
+      only a logger reading `v.Error` records it. On its own it would be a regression, swallowing
+      the stack trace `http.Server` prints today.
+- [x] **Whether the request carried an `Authorization` header**, as a boolean on the `decided` line.
+      Never the value — Mirage holds no credentials and this keeps it that way.
+
 ## Verify in code
 
 - [x] **Confirm `*echo.Response` implements `http.Flusher` in Echo v5.** It does, and
@@ -132,9 +235,11 @@ demands it.
 
 - [ ] Target Namespace as a config override, for the case where the Client's ServiceAccount has a
       RoleBinding in some other namespace.
-- [ ] Self-signed TLS mode, for Clients that call `rest.InClusterConfig()` directly and therefore
-      ignore `KUBECONFIG`. Needs cert generation plus a projected volume overriding `ca.crt`.
-      See [ADR 0002](./docs/adr/0002-plaintext-loopback-not-tls.md).
+- [ ] Support for Clients that call `rest.InClusterConfig()` directly and therefore ignore
+      `KUBECONFIG`. Mirage now serves TLS, but `InClusterConfig` hardcodes the CA bundle path, so
+      this additionally needs a projected volume overriding `ca.crt` — and therefore a CA to
+      distribute, which the self-signed mode deliberately avoids.
+      See [ADR 0002](./docs/adr/0002-self-signed-tls-on-loopback.md).
 - [ ] Masking `SelfSubjectAccessReview` to always answer `allowed: true`, for Clients that check
       their own permissions at startup and refuse to run. Shipwright does not, so this is unbuilt.
       It would not violate [ADR 0001](./docs/adr/0001-mirage-never-adds-authority.md) — the API

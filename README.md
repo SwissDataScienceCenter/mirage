@@ -106,7 +106,12 @@ data:
     clusters:
       - name: mirage
         cluster:
-          server: http://127.0.0.1:8001
+          # https, not http — clientcmd reads a kubeconfig's credentials only for
+          # an https server, and drops them silently otherwise. Mirage generates a
+          # self-signed certificate at startup and nothing verifies it, so
+          # verification is skipped. See ADR 0002.
+          server: https://127.0.0.1:8001
+          insecure-skip-tls-verify: true
     users:
       - name: mirage
         user:
@@ -141,7 +146,10 @@ spec:
             - name: mirage-config
               mountPath: /etc/mirage
           startupProbe:
-            httpGet: {path: /healthz, port: 8001}
+            # host is required: without it the kubelet probes the Pod IP, and
+            # Mirage binds loopback only. scheme is required for the same kind of
+            # reason — the listener is HTTPS.
+            httpGet: {path: /healthz, port: 8001, host: 127.0.0.1, scheme: HTTPS}
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -196,6 +204,17 @@ and the outbound path.
 
 If the Client is getting unexplained `403`s, look for Mirage's warnings about cluster-wide requests
 that were passed through: that is the signature of a resource missing from `confined`.
+
+Check `"authorization": false` on those same lines first, though. It means the request reached
+Mirage with no `Authorization` header and will arrive at the API server as `system:anonymous`, so
+*every* request 403s rather than just the unconfigured ones — usually because the Client is not
+reading the kubeconfig, or is reading one whose `server` is not `https://`. Mirage forwards that
+header untouched and never logs its value.
+
+A `5xx` is Mirage's own, since Upstream's statuses are forwarded unchanged; those are logged at
+error level with the cause, whatever the log level. Note that a Client using client-go reports any
+failed discovery request as the single word `unknown` regardless of what actually happened, so
+Mirage's logs, not the Client's, are where the answer is.
 
 ## Development
 
