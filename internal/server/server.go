@@ -170,6 +170,12 @@ func Deciding(d *decide.Decider, m *mask.Handler, log *slog.Logger) echo.Middlew
 				slog.String("method", req.Method),
 				slog.String("inbound", inbound),
 				slog.String("outbound", dec.Path),
+				// Whether the Client authenticated itself, never what with. Mirage
+				// holds no credentials and forwards this header untouched (ADR
+				// 0001), so if it is absent here the request will reach Upstream as
+				// system:anonymous and come back 403 — a failure that otherwise
+				// looks identical to a missing `confined` entry.
+				slog.Bool("authorization", req.Header.Get("Authorization") != ""),
 			)
 
 			switch dec.Action {
